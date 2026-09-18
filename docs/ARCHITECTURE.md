@@ -126,7 +126,7 @@ src/
 
 ## 2. Database design
 
-Thirteen collections.
+Fourteen collections.
 
 ### Game data — the studio-specific half
 

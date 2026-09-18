@@ -14,6 +14,7 @@ import {
   ticketClaimedLog,
   ticketUnclaimedLog,
   ticketClosedLog,
+  transcriptButtons,
 } from './components.js';
 import { generateTranscript, toTranscriptMessages } from './transcript.js';
 import { Transcript, generateToken, hashToken } from '../../database/models/Transcript.js';
@@ -438,14 +439,22 @@ export class TicketManager {
     // Web transcript record, built from the same capture. Guarded separately:
     // the HTML file is the fallback, so a failure here must neither stop the
     // ticket closing nor lose the attachment that already exists.
-    let viewerUrl = null;
+    let links = { viewUrl: null, downloadUrl: null };
     if (transcript && config.tickets.webTranscriptsEnabled !== false) {
       try {
-        viewerUrl = await this.#storeWebTranscript(guild, ticket, transcript, config);
+        links = await this.#storeWebTranscript(guild, ticket, transcript, config);
       } catch (err) {
         log.error({ err, ticketId }, 'Failed to store web transcript — falling back to the file');
       }
     }
+
+    const viewerUrl = links.viewUrl;
+    const buttons = transcriptButtons(links.viewUrl, links.downloadUrl);
+
+    // The web viewer is the primary route, so the file is attached only when
+    // there is no working link — otherwise every closed ticket ships a
+    // duplicate copy of data we already stored.
+    const attachment = viewerUrl || !transcript ? [] : [transcript.attachment];
 
     // Let the opener keep a copy — they lose channel access in a moment.
     if (config.tickets.dmTranscriptToUser) {
@@ -457,25 +466,26 @@ export class TicketManager {
           .addFields(field('Reason', reason))
           .setFooter({ text: guild.name });
 
-        if (viewerUrl) {
-          summary.addFields(
-            field(
-              'Your transcript',
-              `[Read it online](${viewerUrl})\n` +
-                '*Keep this link private — anyone who has it can read the whole ticket.*',
-            ),
-          );
-        }
+        summary.addFields(
+          field(
+            'Your transcript',
+            viewerUrl
+              ? 'Open it with the button below.\n*Keep this link private — anyone who has it can read the whole ticket.*'
+              : 'Attached to this message as an HTML file.',
+          ),
+        );
 
         await trySendDM(opener, {
           embeds: [summary],
-          files: transcript ? [transcript.attachment] : [],
+          components: buttons,
+          files: attachment,
         });
       }
     }
 
     const logMessage = await this.logs.tickets(guildId, ticketClosedLog(ticket, viewerUrl), {
-      files: transcript ? [transcript.attachment] : undefined,
+      components: buttons.length ? buttons : undefined,
+      files: attachment.length ? attachment : undefined,
     });
     if (logMessage) {
       ticket.transcript.url = logMessage.url;
@@ -507,7 +517,9 @@ export class TicketManager {
    */
   async #storeWebTranscript(guild, ticket, transcript, config) {
     const web = this.client.getSystem('web');
-    if (!web?.enabled) return null;
+    // `listening`, not `enabled`: a configured-but-crashed server must produce
+    // the file fallback rather than links that go nowhere.
+    if (!web?.listening) return { viewUrl: null, downloadUrl: null };
 
     const category = getCategory(ticket.category);
 
@@ -568,7 +580,7 @@ export class TicketManager {
       'Web transcript stored',
     );
 
-    return web.buildUrl(token);
+    return { viewUrl: web.buildUrl(token), downloadUrl: web.buildDownloadUrl(token) };
   }
 
   /**

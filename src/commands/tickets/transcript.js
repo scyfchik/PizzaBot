@@ -2,6 +2,7 @@ import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.
 import { Transcript, generateToken, hashToken } from '../../database/models/Transcript.js';
 import { Permission, Emojis } from '../../config/constants.js';
 import { hasPermission } from '../../systems/staff/permissions.js';
+import { transcriptButtons } from '../../systems/tickets/components.js';
 import { embeds, field, padNumber } from '../../utils/embeds.js';
 import { fullTimestamp } from '../../utils/time.js';
 import { UserError, PermissionError } from '../../core/errors.js';
@@ -91,7 +92,6 @@ async function link(interaction, client, transcript, staff) {
       embeds
         .success(`New private link for ticket **#${padNumber(transcript.ticketId)}**.`)
         .addFields(
-          field(`${Emojis.LINK} Link`, web.buildUrl(token)),
           field(
             `${Emojis.ALERT} Handle with care`,
             'Anyone with this URL can read the whole ticket. Send it directly to the person who needs it — never into a public channel.\n' +
@@ -99,6 +99,7 @@ async function link(interaction, client, transcript, staff) {
           ),
         ),
     ],
+    components: transcriptButtons(web.buildUrl(token), web.buildDownloadUrl(token)),
   });
 }
 

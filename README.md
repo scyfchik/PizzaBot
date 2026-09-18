@@ -27,7 +27,7 @@ they need your game's data.
 | System | What it does |
 |---|---|
 | **Support tickets** | 6 categories with per-category forms, sequential numbering, claim/unclaim/close, outcome tracking (Accepted/Denied/Resolved), response-time metrics, queue view |
-| **Transcripts** | Web viewer with summary, timeline, player context and purchase history above a Discord-style chat log — searchable, mobile-friendly, print-to-PDF, behind an unguessable expiring link |
+| **Transcripts** | Web viewer with summary, timeline, player context and purchase history above a Discord-style chat log — searchable, mobile-friendly, print-to-PDF. Reached from 🌐/📥 buttons on the close message; falls back to an HTML attachment if the viewer is down |
 | **Player analytics** | One lookup for Discord, Roblox, playtime, level, spend, tickets, warnings and bugs |
 | **Economy** | Per-player transaction history including failures, deduplicated on Roblox's receipt id |
 | **Game monitoring** | Live player counts, active servers, event feed, connection health |

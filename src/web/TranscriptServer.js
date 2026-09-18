@@ -105,10 +105,34 @@ export class TranscriptServer {
     log.info('Transcript web viewer stopped');
   }
 
-  /** Public URL for a token, or null when the viewer is not configured. */
+  /**
+   * Whether the server is actually accepting connections.
+   *
+   * Distinct from `enabled`, which only reflects configuration. A port clash
+   * leaves the bot running with `WEB_ENABLED=true` and nothing listening, and
+   * in that state we must fall back to attaching the HTML file rather than
+   * posting links that go nowhere.
+   */
+  get listening() {
+    return Boolean(this.server?.listening);
+  }
+
+  /**
+   * Public URL for a token, or null when the viewer cannot serve it.
+   *
+   * Note what is *not* in the path: the ticket number. The URL carries only the
+   * random token, so the link leaks neither how many tickets the studio has
+   * handled nor which one this is.
+   */
   buildUrl(token) {
-    if (!this.enabled || !env.web.baseUrl) return null;
+    if (!this.listening || !env.web.baseUrl) return null;
     return `${env.web.baseUrl}/t/${token}`;
+  }
+
+  /** Same page, served as a file download. */
+  buildDownloadUrl(token) {
+    const base = this.buildUrl(token);
+    return base ? `${base}/download` : null;
   }
 
   // ------------------------------------------------------------- internals
@@ -146,11 +170,15 @@ export class TranscriptServer {
       return;
     }
 
-    const match = /^\/t\/([A-Za-z0-9_-]{16,128})\/?$/.exec(path);
+    // `/t/<token>` renders the page; `/t/<token>/download` serves the same
+    // bytes with a Content-Disposition header. One route, two presentations —
+    // the download must never be a second rendering path that could drift.
+    const match = /^\/t\/([A-Za-z0-9_-]{16,128})(\/download)?\/?$/.exec(path);
     if (!match) {
       this.#send(res, 404, renderError(404, 'Not found', 'There is nothing at this address.'));
       return;
     }
+    const asDownload = Boolean(match[2]);
 
     if (!this.#allow(clientIp)) {
       this.#send(
@@ -184,10 +212,20 @@ export class TranscriptServer {
       { $inc: { viewCount: 1 }, $set: { lastViewedAt: new Date() } },
     ).catch((err) => log.warn({ err }, 'Failed to record transcript view'));
 
-    this.#send(res, 200, renderViewer(transcript));
+    const body = renderViewer(transcript);
+
+    // The filename is the one place the ticket number appears, and only after
+    // the token has already been accepted — it is not guessable from the URL.
+    const extra = asDownload
+      ? {
+          'Content-Disposition': `attachment; filename="ticket-${String(transcript.ticketId).padStart(6, '0')}.html"`,
+        }
+      : {};
+
+    this.#send(res, 200, body, 'text/html; charset=utf-8', extra);
   }
 
-  #send(res, status, body, contentType = 'text/html; charset=utf-8') {
+  #send(res, status, body, contentType = 'text/html; charset=utf-8', extraHeaders = {}) {
     res.writeHead(status, {
       'Content-Type': contentType,
       'Content-Length': Buffer.byteLength(body),
@@ -210,6 +248,7 @@ export class TranscriptServer {
       // The token is in the URL, so intermediaries must not keep a copy.
       'Cache-Control': 'private, no-store, max-age=0',
       'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), interest-cohort=()',
+      ...extraHeaders,
     });
     res.end(body);
   }

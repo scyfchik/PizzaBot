@@ -361,12 +361,30 @@ them up.
 
 ### Transcripts and the web viewer
 
-Two outputs from one pass over the channel:
+One pass over the channel, two possible outputs — and **the web viewer is the
+primary route.** On close, the ticket log and the opener's DM carry two link
+buttons:
 
-1. **A self-contained HTML file**, attached to the ticket log entry and DM'd to
-   the opener. This is the fallback and always happens.
-2. **A `Transcript` document** rendered by the built-in web viewer at
-   `/t/<token>` — searchable, mobile-friendly, print-to-PDF.
+```
+  [🌐 View Transcript]   →  https://host/t/<token>
+  [📥 Download HTML]     →  https://host/t/<token>/download
+```
+
+Both are Discord *link* buttons, not custom-ID buttons: they carry no state,
+cannot be clicked into an interaction by the wrong person, and keep working
+after the bot goes offline. The URL is the only credential, which is what the
+token model already assumes.
+
+The download route serves the same bytes as the view route with a
+`Content-Disposition` header — one rendering path, so the file can never drift
+from the page.
+
+**The HTML file is attached only when there is no working link.** That is the
+fallback, and it triggers on any of: `WEB_ENABLED=false`, the server failing to
+bind its port, `webTranscriptsEnabled` turned off for the guild, or the
+transcript record failing to save. The check is `server.listening`, not the
+config flag — a configured-but-crashed server must produce the file, not links
+that go nowhere.
 
 The viewer is `node:http`, not a framework: it serves two routes and needs no
 routing, middleware or body parsing.
@@ -389,6 +407,7 @@ Defences, in order of what they stop:
 | `noindex` header + meta + `robots.txt` | Search engines indexing private tickets |
 | `Cache-Control: no-store`, `no-referrer` | Intermediaries and target sites seeing the token |
 | 90-day default expiry (Mongo TTL) | Links working forever on personal data |
+| Ticket number absent from the URL | The link leaks neither which ticket this is nor how many the studio has handled. It appears only in the download filename, after the token has already been accepted. |
 
 `WEB_HOST` defaults to `127.0.0.1`. Publishing ticket transcripts onto a public
 interface should be a deliberate act, not what happens because a default went

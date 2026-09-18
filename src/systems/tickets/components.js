@@ -273,6 +273,41 @@ export function ticketClaimedLog(ticket, staffUser) {
     .setTimestamp();
 }
 
+/**
+ * Transcript access buttons for the close message.
+ *
+ * Discord link buttons, not custom-ID buttons: they carry no state, cannot be
+ * clicked by the wrong person into an interaction, and keep working forever
+ * without the bot being online. The URL itself is the only credential, which is
+ * exactly what the token model assumes.
+ *
+ * Returns an empty array when the viewer is unavailable, and the caller falls
+ * back to attaching the HTML file.
+ */
+export function transcriptButtons(viewUrl, downloadUrl) {
+  if (!viewUrl) return [];
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('View Transcript')
+      .setEmoji('🌐')
+      .setStyle(ButtonStyle.Link)
+      .setURL(viewUrl),
+  );
+
+  if (downloadUrl) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setLabel('Download HTML')
+        .setEmoji('📥')
+        .setStyle(ButtonStyle.Link)
+        .setURL(downloadUrl),
+    );
+  }
+
+  return [row];
+}
+
 export function ticketUnclaimedLog(ticket, staffUser) {
   return new EmbedBuilder()
     .setColor(Colors.WARNING)
@@ -334,14 +369,21 @@ export function ticketClosedLog(ticket, viewerUrl = null) {
     embed.addFields(field('Open for', humanMs(ticket.resolutionTimeMs), true));
   }
 
-  // The link carries the access token, so it goes only here — the ticket log,
-  // which is staff-only — and to the opener's DMs. Never into a public channel.
+  // The link lives on the buttons, not in the embed body — repeating the token
+  // as text just gives it two places to be copied out of. The note stays,
+  // because the person clicking needs to know what they are sharing.
   if (viewerUrl) {
     embed.addFields(
       field(
         `${Emojis.TRANSCRIPT} Transcript`,
-        `[Open the web transcript](${viewerUrl})\n` +
-          '*Private link — anyone who has it can read this ticket.*',
+        'Use the buttons below.\n*Private link — anyone who has it can read this ticket.*',
+      ),
+    );
+  } else {
+    embed.addFields(
+      field(
+        `${Emojis.TRANSCRIPT} Transcript`,
+        'Attached as an HTML file — the web viewer was unavailable.',
       ),
     );
   }

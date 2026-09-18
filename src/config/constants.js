@@ -309,13 +309,16 @@ export const AppealStatus = Object.freeze({
   REJECTED: 'rejected', // punishment stands
 });
 
-/** Who issued a case: a human via a command, or a system reacting on its own. */
+/**
+ * Where a case came from.
+ *
+ * Pizza Bot does not issue punishments, so there is no `command` origin: cases
+ * are either noticed in Discord's audit log, or produced by this bot's own
+ * security response.
+ */
 export const CaseOrigin = Object.freeze({
-  COMMAND: 'command',
-  AUTO_ESCALATION: 'auto_escalation',
-  ANTI_SPAM: 'anti_spam',
-  /** Scam patterns and the word blacklist — content, not volume. */
-  AUTOMOD: 'automod',
+  /** Recorded from the Discord audit log — another bot or a moderator acted. */
+  AUDIT_LOG: 'audit_log',
   ANTI_RAID: 'anti_raid',
   ANTI_NUKE: 'anti_nuke',
 });
@@ -429,14 +432,6 @@ export const SecurityEvent = Object.freeze({
   NEW_ACCOUNT_WAVE: 'new_account_wave',
   LOCKDOWN_ENABLED: 'lockdown_enabled',
   LOCKDOWN_DISABLED: 'lockdown_disabled',
-  SPAM_RATE: 'spam_rate',
-  SPAM_DUPLICATE: 'spam_duplicate',
-  SPAM_MENTION: 'spam_mention',
-  SPAM_EMOJI: 'spam_emoji',
-  SPAM_LINK: 'spam_link',
-  SPAM_INVITE: 'spam_invite',
-  SCAM_PATTERN: 'scam_pattern',
-  BLACKLISTED_WORD: 'blacklisted_word',
   NUKE_CHANNEL_DELETE: 'nuke_channel_delete',
   NUKE_ROLE_DELETE: 'nuke_role_delete',
   NUKE_MASS_BAN: 'nuke_mass_ban',

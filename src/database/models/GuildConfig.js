@@ -94,48 +94,9 @@ const guildConfigSchema = new mongoose.Schema(
         lockdownMinutes: { type: Number, default: 15 },
       },
 
-      /**
-       * Anti-spam and content filtering.
-       *
-       * **Off by default.** Pizza Bot is the studio's operational tool, and
-       * general chat moderation belongs to Dyno/Carl-bot — running two bots
-       * that both delete messages produces double punishments and arguments
-       * about which one did it. The implementation is kept and tested, so a
-       * server without another automod bot can switch it on with
-       * `/config security anti-spam:true`.
-       */
-      antiSpam: {
-        enabled: { type: Boolean, default: false },
-        messageThreshold: { type: Number, default: 6 },
-        windowSeconds: { type: Number, default: 5 },
-        duplicateThreshold: { type: Number, default: 3 },
-        mentionLimit: { type: Number, default: 5 },
-        emojiLimit: { type: Number, default: 12 },
-        linkLimit: { type: Number, default: 4 },
-        blockInvites: { type: Boolean, default: true },
-        /** Strikes decay after this long with no further offence. */
-        decayMinutes: { type: Number, default: 30 },
-        ignoredChannels: { type: [String], default: [] },
-        ignoredRoles: { type: [String], default: [] },
-      },
-
-      /**
-       * Content filtering — what a message *says*, as opposed to how fast it
-       * arrives. Runs inside the same anti-spam pass so a single message is
-       * only ever judged and deleted once.
-       */
-      autoMod: {
-        /** Free robux, nitro scams, fake verification links. Off by default. */
-        scamDetection: { type: Boolean, default: false },
-        /** delete | delete_warn | delete_timeout */
-        scamAction: { type: String, default: 'delete_timeout' },
-
-        blacklistEnabled: { type: Boolean, default: false },
-        /** Lowercased words or phrases. Matched on word boundaries. */
-        blacklist: { type: [String], default: [] },
-        /** delete | delete_warn | delete_timeout */
-        blacklistAction: { type: String, default: 'delete_warn' },
-      },
+      // Anti-spam and content filtering are deliberately absent. Pizza Bot does
+      // not read messages for moderation — Dyno/Carl-bot own that, and two bots
+      // deleting the same message produces double punishments.
 
       antiNuke: {
         enabled: { type: Boolean, default: true },
@@ -170,17 +131,16 @@ const guildConfigSchema = new mongoose.Schema(
       },
     },
 
+    /**
+     * Moderation history.
+     *
+     * Pizza Bot records punishments from Discord's audit log; it does not issue
+     * them. There is nothing to configure about escalation or DM notices here,
+     * because whichever bot actually performs the action owns those decisions.
+     */
     moderation: {
-      /** Auto-escalation on repeat warnings. */
-      escalation: {
-        enabled: { type: Boolean, default: true },
-        warnsBeforeTimeout: { type: Number, default: 3 },
-        warnsBeforeKick: { type: Number, default: 5 },
-        timeoutMinutes: { type: Number, default: 60 },
-        /** Warns older than this no longer count toward escalation. */
-        warnDecayDays: { type: Number, default: 90 },
-      },
-      dmOnPunishment: { type: Boolean, default: true },
+      /** Write a case when another bot or moderator acts. */
+      recordExternalActions: { type: Boolean, default: true },
     },
 
     /** QA workflow — bug reports from players and the testing team. */

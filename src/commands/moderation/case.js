@@ -211,8 +211,8 @@ async function setAppeal(interaction, punishment, staff, logs) {
   punishment.appeal.reviewedAt = new Date();
   if (decision) punishment.appeal.decisionReason = decision;
 
-  // An accepted appeal means the punishment no longer stands. Say so in the
-  // record, or the case keeps counting toward escalation forever.
+  // An accepted appeal means the punishment no longer stands, so the case stops
+  // counting against the player in `/player history` and future appeals.
   if (status === AppealStatus.ACCEPTED) {
     punishment.active = false;
     punishment.voidedAt = new Date();
@@ -232,7 +232,7 @@ async function setAppeal(interaction, punishment, staff, logs) {
       embeds.success(
         `Case #${padNumber(punishment.caseId)} appeal set to **${appealLabel(status)}**.` +
           (status === AppealStatus.ACCEPTED
-            ? '\nThe case was voided — it no longer counts toward escalation. ' +
+            ? '\nThe case was voided — it no longer counts against the player. ' +
               'Remember to lift the punishment itself if it is still in force.'
             : ''),
       ),

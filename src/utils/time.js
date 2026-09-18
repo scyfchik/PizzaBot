@@ -64,6 +64,3 @@ export function fullTimestamp(date) {
 export function accountAgeDays(createdAt) {
   return Math.floor((Date.now() - new Date(createdAt).getTime()) / UNITS.d);
 }
-
-/** Discord's own hard cap on member timeouts. */
-export const MAX_TIMEOUT_MS = 28 * UNITS.d;

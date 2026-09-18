@@ -4,8 +4,9 @@ import { memberLeaveEmbed } from '../../systems/logging/serverEvents.js';
 export const name = Events.GuildMemberRemove;
 
 /**
- * A member left — voluntarily, or by being kicked. Discord fires the same
- * event for both, so anti-nuke checks the audit log to tell them apart.
+ * A member left — voluntarily, or by being kicked. Discord fires the same event
+ * for both, so anti-nuke and the audit recorder each consult the audit log to
+ * tell them apart.
  */
 export async function execute(client, member) {
   if (member.partial) {
@@ -15,5 +16,6 @@ export async function execute(client, member) {
   }
 
   await client.getSystem('antiNuke').onKick(member);
+  await client.getSystem('auditRecorder').onMemberRemove(member);
   await client.getSystem('logging').server(member.guild.id, memberLeaveEmbed(member));
 }

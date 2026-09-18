@@ -8,8 +8,8 @@ import { GameDataService } from '../../systems/game/GameDataService.js';
 import { TranscriptServer } from '../../web/TranscriptServer.js';
 import { IngestHandler } from '../../web/ingest.js';
 import { env } from '../../config/env.js';
+import { AuditRecorder } from '../../systems/moderation/auditRecorder.js';
 import { SecurityService } from '../../systems/security/SecurityService.js';
-import { AntiSpam } from '../../systems/security/AntiSpam.js';
 import { AntiRaid } from '../../systems/security/AntiRaid.js';
 import { AntiNuke } from '../../systems/security/AntiNuke.js';
 import { Lockdown } from '../../systems/security/Lockdown.js';
@@ -40,6 +40,7 @@ export async function execute(client) {
     'moderation',
     new ModerationService(client, logging, activity),
   );
+  client.registerSystem('auditRecorder', new AuditRecorder(client, moderation));
   client.registerSystem('tickets', new TicketManager(client, logging, activity));
   client.registerSystem('qa', new BugReportService(client, logging, activity));
 
@@ -61,7 +62,6 @@ export async function execute(client) {
   const security = client.registerSystem('security', new SecurityService(client, logging));
   const lockdown = client.registerSystem('lockdown', new Lockdown(client, security));
 
-  client.registerSystem('antiSpam', new AntiSpam(client, security, moderation));
   client.registerSystem('antiRaid', new AntiRaid(client, security, moderation, lockdown));
   client.registerSystem('antiNuke', new AntiNuke(client, security));
 
@@ -69,15 +69,15 @@ export async function execute(client) {
   // startup would keep the process alive with nothing to do.
   ensureIndexes();
 
-  // Warm the config cache so the first message of the day does not pay for a
-  // database round trip inside the anti-spam hot path.
+  // Warm the config cache so the first permission check of the day does not
+  // pay for a database round trip.
   for (const guild of client.guilds.cache.values()) {
     await getConfig(guild.id).catch((err) =>
       log.error({ err, guild: guild.id }, 'Failed to load guild config'),
     );
   }
 
-  startTimers(client, moderation, lockdown);
+  startTimers(client, lockdown);
 
   client.user.setPresence({
     activities: [{ name: 'the server 🍕', type: ActivityType.Watching }],
@@ -90,14 +90,12 @@ export async function execute(client) {
   );
 }
 
-function startTimers(client, moderation, lockdown) {
-  // Lift expired temp-bans, quarantines and lockdowns.
-  client.setManagedInterval(() => moderation.sweepExpired(), 60_000);
+function startTimers(client, lockdown) {
+  // A lockdown nobody remembers to lift is its own outage.
   client.setManagedInterval(() => lockdown.sweepExpired(), 60_000);
 
   // Detector windows hold one key per active user; prune keeps that bounded.
   client.setManagedInterval(() => {
-    client.getSystem('antiSpam').prune();
     client.getSystem('antiRaid').prune();
     client.getSystem('antiNuke').prune();
   }, 300_000);

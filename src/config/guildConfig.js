@@ -7,8 +7,8 @@ const log = createLogger('guild-config');
 /**
  * Cached access to per-guild configuration.
  *
- * `messageCreate` fires constantly and anti-spam needs the config on every
- * single message. A database round trip there would be both slow and
+ * Permission checks run on every interaction and the security detectors read
+ * thresholds on every join. A database round trip there would be both slow and
  * expensive, so configs are cached in memory and invalidated explicitly on
  * write — not by a short TTL, because a stale security threshold during an
  * incident is exactly the thing we are trying to avoid.

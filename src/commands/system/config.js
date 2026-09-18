@@ -162,7 +162,6 @@ export const data = new SlashCommandBuilder()
         o.setName('ping-role').setDescription('Role pinged for high-severity alerts'),
       )
       .addBooleanOption((o) => o.setName('anti-raid').setDescription('Enable anti-raid'))
-      .addBooleanOption((o) => o.setName('anti-spam').setDescription('Enable anti-spam'))
       .addBooleanOption((o) => o.setName('anti-nuke').setDescription('Enable anti-nuke'))
       .addStringOption((o) =>
         o
@@ -189,55 +188,6 @@ export const data = new SlashCommandBuilder()
           .setDescription('Joins within the window that trip anti-raid')
           .setMinValue(3)
           .setMaxValue(100),
-      )
-      .addIntegerOption((o) =>
-        o
-          .setName('spam-message-threshold')
-          .setDescription('Messages within the window that count as spam')
-          .setMinValue(3)
-          .setMaxValue(30),
-      ),
-  )
-
-  .addSubcommand((sub) =>
-    sub
-      .setName('automod')
-      .setDescription('Content filtering — scam patterns and the word blacklist')
-      .addBooleanOption((o) =>
-        o.setName('scam-detection').setDescription('Detect free-robux / nitro / phishing patterns'),
-      )
-      .addStringOption((o) =>
-        o
-          .setName('scam-action')
-          .setDescription('What to do with a detected scam')
-          .addChoices(
-            { name: 'Delete + 1h timeout (recommended)', value: 'delete_timeout' },
-            { name: 'Delete + warn', value: 'delete_warn' },
-            { name: 'Delete only', value: 'delete' },
-          ),
-      )
-      .addBooleanOption((o) => o.setName('blacklist').setDescription('Enable the word blacklist'))
-      .addStringOption((o) =>
-        o
-          .setName('blacklist-add')
-          .setDescription('Add terms, comma separated')
-          .setMaxLength(500),
-      )
-      .addStringOption((o) =>
-        o
-          .setName('blacklist-remove')
-          .setDescription('Remove terms, comma separated')
-          .setMaxLength(500),
-      )
-      .addStringOption((o) =>
-        o
-          .setName('blacklist-action')
-          .setDescription('What to do with a blacklisted word')
-          .addChoices(
-            { name: 'Delete + warn (recommended)', value: 'delete_warn' },
-            { name: 'Delete only', value: 'delete' },
-            { name: 'Delete + 1h timeout', value: 'delete_timeout' },
-          ),
       ),
   )
 
@@ -290,22 +240,11 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('moderation')
-      .setDescription('Moderation settings')
-      .addBooleanOption((o) => o.setName('dm-on-punishment').setDescription('DM users when punished'))
-      .addBooleanOption((o) => o.setName('escalation').setDescription('Auto-escalate repeat warnings'))
-      .addIntegerOption((o) =>
+      .setDescription('Moderation history settings')
+      .addBooleanOption((o) =>
         o
-          .setName('warns-before-timeout')
-          .setDescription('Active warns that trigger an automatic timeout')
-          .setMinValue(2)
-          .setMaxValue(20),
-      )
-      .addIntegerOption((o) =>
-        o
-          .setName('warns-before-kick')
-          .setDescription('Active warns that trigger an automatic kick (0 to disable)')
-          .setMinValue(0)
-          .setMaxValue(20),
+          .setName('record-external')
+          .setDescription('Record punishments issued by other bots or moderators'),
       ),
   );
 
@@ -335,8 +274,6 @@ export async function execute(interaction, { staff }) {
       return ticketSettings(interaction, config);
     case 'security':
       return securitySettings(interaction, config);
-    case 'automod':
-      return autoModSettings(interaction, config);
     case 'qa':
       return qaSettings(interaction, config);
     case 'game':
@@ -537,7 +474,6 @@ async function securitySettings(interaction, config) {
 
   for (const [option, path, label] of [
     ['anti-raid', 'antiRaid', 'Anti-raid'],
-    ['anti-spam', 'antiSpam', 'Anti-spam'],
     ['anti-nuke', 'antiNuke', 'Anti-nuke'],
   ]) {
     if (opt(option) !== null) {
@@ -566,71 +502,7 @@ async function securitySettings(interaction, config) {
     changes.push(`Raid join threshold → **${sec.antiRaid.joinThreshold}**`);
   }
 
-  if (opt('spam-message-threshold') !== null) {
-    sec.antiSpam.messageThreshold = interaction.options.getInteger('spam-message-threshold');
-    changes.push(`Spam message threshold → **${sec.antiSpam.messageThreshold}**`);
-  }
-
   return applyChanges(interaction, config, changes);
-}
-
-async function autoModSettings(interaction, config) {
-  const changes = [];
-  const automod = config.security.autoMod;
-  const opt = (name) => interaction.options.get(name)?.value ?? null;
-
-  if (opt('scam-detection') !== null) {
-    automod.scamDetection = interaction.options.getBoolean('scam-detection');
-    changes.push(`Scam detection → **${automod.scamDetection ? 'on' : 'off'}**`);
-  }
-
-  const scamAction = interaction.options.getString('scam-action');
-  if (scamAction) {
-    automod.scamAction = scamAction;
-    changes.push(`Scam action → \`${scamAction}\``);
-  }
-
-  if (opt('blacklist') !== null) {
-    automod.blacklistEnabled = interaction.options.getBoolean('blacklist');
-    changes.push(`Word blacklist → **${automod.blacklistEnabled ? 'on' : 'off'}**`);
-  }
-
-  const blacklistAction = interaction.options.getString('blacklist-action');
-  if (blacklistAction) {
-    automod.blacklistAction = blacklistAction;
-    changes.push(`Blacklist action → \`${blacklistAction}\``);
-  }
-
-  const toAdd = splitTerms(interaction.options.getString('blacklist-add'));
-  if (toAdd.length) {
-    const before = automod.blacklist.length;
-    automod.blacklist = [...new Set([...automod.blacklist, ...toAdd])];
-    changes.push(`Blacklist → added **${automod.blacklist.length - before}** term(s)`);
-  }
-
-  const toRemove = splitTerms(interaction.options.getString('blacklist-remove'));
-  if (toRemove.length) {
-    const removeSet = new Set(toRemove);
-    const before = automod.blacklist.length;
-    automod.blacklist = automod.blacklist.filter((t) => !removeSet.has(t.toLowerCase()));
-    changes.push(`Blacklist → removed **${before - automod.blacklist.length}** term(s)`);
-  }
-
-  if (changes.length) {
-    // Never echo the terms themselves back into a channel.
-    changes.push(`_Blacklist now holds ${automod.blacklist.length} term(s)._`);
-  }
-
-  return applyChanges(interaction, config, changes);
-}
-
-function splitTerms(value) {
-  if (!value) return [];
-  return value
-    .split(',')
-    .map((t) => t.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 100);
 }
 
 async function qaSettings(interaction, config) {
@@ -729,22 +601,13 @@ async function moderationSettings(interaction, config) {
   const mod = config.moderation;
   const opt = (name) => interaction.options.get(name)?.value ?? null;
 
-  if (opt('dm-on-punishment') !== null) {
-    mod.dmOnPunishment = interaction.options.getBoolean('dm-on-punishment');
-    changes.push(`DM on punishment → **${mod.dmOnPunishment ? 'on' : 'off'}**`);
-  }
-  if (opt('escalation') !== null) {
-    mod.escalation.enabled = interaction.options.getBoolean('escalation');
-    changes.push(`Auto-escalation → **${mod.escalation.enabled ? 'on' : 'off'}**`);
-  }
-  if (opt('warns-before-timeout') !== null) {
-    mod.escalation.warnsBeforeTimeout = interaction.options.getInteger('warns-before-timeout');
-    changes.push(`Warns before timeout → **${mod.escalation.warnsBeforeTimeout}**`);
-  }
-  if (opt('warns-before-kick') !== null) {
-    mod.escalation.warnsBeforeKick = interaction.options.getInteger('warns-before-kick');
+  if (opt('record-external') !== null) {
+    mod.recordExternalActions = interaction.options.getBoolean('record-external');
     changes.push(
-      `Warns before kick → **${mod.escalation.warnsBeforeKick || 'disabled'}**`,
+      `Record external actions → **${mod.recordExternalActions ? 'on' : 'off'}**` +
+        (mod.recordExternalActions
+          ? ''
+          : '\n_With this off, punishments issued by other bots leave no history — ban appeals become unanswerable._'),
     );
   }
 
@@ -799,23 +662,14 @@ async function view(interaction, config) {
       field(
         'Security',
         `Anti-raid ${flag(config.security.antiRaid.enabled)} (${config.security.antiRaid.joinThreshold} joins / ${config.security.antiRaid.windowSeconds}s → \`${config.security.antiRaid.action}\`)\n` +
-          `Anti-spam ${flag(config.security.antiSpam.enabled)} (${config.security.antiSpam.messageThreshold} msgs / ${config.security.antiSpam.windowSeconds}s)\n` +
           `Anti-nuke ${flag(config.security.antiNuke.enabled)} (→ \`${config.security.antiNuke.response}\`)\n` +
           `Quarantine ${role(config.security.quarantineRoleId)} · alerts ${channel(config.security.alertChannelId)}\n` +
           `Lockdown: ${config.security.lockdown.active ? '🔒 **ACTIVE**' : 'inactive'}`,
       ),
       field(
-        'Moderation',
-        `DM on punishment ${flag(config.moderation.dmOnPunishment)}\n` +
-          `Escalation ${flag(config.moderation.escalation.enabled)} — ` +
-          `timeout at **${config.moderation.escalation.warnsBeforeTimeout}** warns, ` +
-          `kick at **${config.moderation.escalation.warnsBeforeKick || '—'}**`,
-      ),
-      field(
-        'AutoMod',
-        `Scam detection ${flag(config.security.autoMod.scamDetection)} (→ \`${config.security.autoMod.scamAction}\`)\n` +
-          `Word blacklist ${flag(config.security.autoMod.blacklistEnabled)} — ` +
-          `${config.security.autoMod.blacklist.length} term(s), \`${config.security.autoMod.blacklistAction}\``,
+        'Moderation history',
+        `Record external actions ${flag(config.moderation.recordExternalActions)}\n` +
+          '_Pizza Bot records punishments from the audit log; it does not issue them._',
       ),
       field(
         'QA',

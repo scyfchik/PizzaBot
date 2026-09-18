@@ -81,37 +81,11 @@ export function caseLogEmbed(punishment) {
   return embed;
 }
 
-/** The DM the punished user receives. Plain, factual, no lecturing. */
-export function userNoticeEmbed(punishment, guildName) {
-  const meta = typeMeta(punishment.type);
+// There is no "you were punished" DM here any more. Pizza Bot does not issue
+// punishments, so notifying the user is the job of whichever bot did — sending
+// our own notice would mean the player gets two.
 
-  const embed = new EmbedBuilder()
-    .setColor(meta.color)
-    .setTitle(`You were ${meta.past} in ${guildName}`)
-    .addFields(field('Reason', truncate(punishment.reason, 900)))
-    .setFooter({ text: `Case #${padNumber(punishment.caseId)}` })
-    .setTimestamp();
-
-  if (punishment.duration) {
-    embed.addFields(
-      field('Duration', formatDuration(punishment.duration), true),
-      field('Expires', punishment.expiresAt ? fullTimestamp(punishment.expiresAt) : '—', true),
-    );
-  }
-
-  if (punishment.type === PunishmentType.BAN || punishment.type === PunishmentType.KICK) {
-    embed.addFields(
-      field(
-        'Appealing',
-        'If you believe this was a mistake, you can submit a ban appeal through the support panel.',
-      ),
-    );
-  }
-
-  return embed;
-}
-
-/** One line per case, for /history. */
+/** One line per case, for `/player history`. */
 export function caseLine(punishment) {
   const meta = typeMeta(punishment.type);
   const strike = punishment.active ? '' : '~~';

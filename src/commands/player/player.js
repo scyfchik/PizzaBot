@@ -16,7 +16,7 @@ import {
 import { caseLine } from '../../systems/moderation/caseEmbeds.js';
 import { hasPermission } from '../../systems/staff/permissions.js';
 import { embeds, field, userLabel, padNumber, truncate } from '../../utils/embeds.js';
-import { fullTimestamp, timestamp, accountAgeDays, formatDuration } from '../../utils/time.js';
+import { fullTimestamp, timestamp, accountAgeDays } from '../../utils/time.js';
 import { UserError, PermissionError } from '../../core/errors.js';
 
 /**

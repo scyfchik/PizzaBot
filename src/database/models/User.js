@@ -25,9 +25,6 @@ const userSchema = new mongoose.Schema(
       kicks: { type: Number, default: 0 },
       bans: { type: Number, default: 0 },
       ticketsOpened: { type: Number, default: 0 },
-      /** Rolling strike count used by anti-spam escalation. */
-      spamStrikes: { type: Number, default: 0 },
-      lastStrikeAt: { type: Date, default: null },
     },
 
     staff: {

@@ -189,7 +189,7 @@ async function summary(interaction) {
             `Anti-nuke ${config.security.antiNuke.enabled ? '🟢' : '⚪'} ` +
               `(→ \`${config.security.antiNuke.response}\`)\n` +
               `Anti-raid ${config.security.antiRaid.enabled ? '🟢' : '⚪'}\n` +
-              `Anti-spam ${config.security.antiSpam.enabled ? '🟢' : '⚪ off — handled by other bots'}`,
+              '_Chat moderation is handled by your automod bot, not this one._',
             true,
           ),
           field(

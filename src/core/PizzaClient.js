@@ -23,9 +23,11 @@ export class PizzaClient extends Client {
       intents: [
         GatewayIntentBits.Guilds, // channels, roles, command routing
         GatewayIntentBits.GuildMembers, // joins/leaves — anti-raid (privileged)
-        GatewayIntentBits.GuildMessages, // message events
-        GatewayIntentBits.MessageContent, // anti-spam content checks (privileged)
-        GatewayIntentBits.GuildModeration, // ban add/remove — anti-nuke
+        GatewayIntentBits.GuildMessages, // ticket response-time tracking
+        GatewayIntentBits.GuildModeration, // ban add/remove — anti-nuke, audit recording
+        // MessageContent is deliberately NOT requested. Pizza Bot does not read
+        // message text: no anti-spam, no content filtering. Not asking for the
+        // permission is a stronger guarantee than not using it.
       ],
       partials: [
         // Without these, events on uncached objects are silently dropped —

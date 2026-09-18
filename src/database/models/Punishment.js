@@ -26,7 +26,7 @@ const punishmentSchema = new mongoose.Schema(
     guildId: { type: String, required: true, index: true },
 
     type: { type: String, required: true, enum: Object.values(PunishmentType) },
-    origin: { type: String, default: CaseOrigin.COMMAND, enum: Object.values(CaseOrigin) },
+    origin: { type: String, default: CaseOrigin.AUDIT_LOG, enum: Object.values(CaseOrigin) },
 
     /** Target. Tag is snapshotted — the account may leave or be deleted. */
     userId: { type: String, required: true, index: true },

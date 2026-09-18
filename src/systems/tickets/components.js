@@ -316,6 +316,13 @@ export function ticketClosedLog(ticket, viewerUrl = null) {
       field('Opened by', `<@${ticket.openerId}>`, true),
       field('Handled by', ticket.claimedBy ? `<@${ticket.claimedBy}>` : 'Unclaimed', true),
       field('Closed by', `<@${ticket.closedBy}>`, true),
+      // The outcome, not just the fact of closing — "Denied" is the line a
+      // future reader actually needs from a ban appeal.
+      field(
+        'Outcome',
+        (TicketDecisionMeta[ticket.decision] ?? TicketDecisionMeta.resolved).label,
+        true,
+      ),
       field('Reason', truncate(ticket.closeReason, 900)),
     )
     .setTimestamp();

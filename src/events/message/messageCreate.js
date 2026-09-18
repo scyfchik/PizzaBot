@@ -9,18 +9,17 @@ const log = createLogger('message');
 export const name = Events.MessageCreate;
 
 /**
- * The hot path.
+ * Ticket response-time tracking, and nothing else.
  *
- * This runs on every message in the server, so it must stay cheap. Anti-spam
- * reads cached config and in-memory windows; the ticket bookkeeping only does
- * a database write inside an actual ticket channel.
+ * Pizza Bot does not read messages for moderation — no anti-spam, no content
+ * filtering, no automod. Dyno/Carl-bot own that, and two bots deleting the same
+ * message produces double punishments and arguments about which one acted.
+ *
+ * So the only work here is inside ticket channels, and even that is skipped in
+ * one indexed query for every other message in the server.
  */
 export async function execute(client, message) {
   if (!message.guild || message.author.bot) return;
-
-  await client.getSystem('antiSpam').handleMessage(message).catch((err) => {
-    log.error({ err, message: message.id }, 'Anti-spam check failed');
-  });
 
   await trackTicketActivity(message).catch((err) => {
     log.error({ err, channel: message.channelId }, 'Ticket activity tracking failed');
@@ -30,9 +29,9 @@ export async function execute(client, message) {
 /**
  * Record response times on ticket channels.
  *
- * `firstResponseMs` is the number that tells you whether support is actually
- * working — how long a player waited before a human said anything. It can only
- * be captured here, at the moment the first staff message arrives.
+ * `firstResponseMs` — how long a player waited before a human said anything —
+ * is the number that tells you whether support is working, and it can only be
+ * captured here, at the moment the first staff message arrives.
  */
 async function trackTicketActivity(message) {
   const ticket = await Ticket.findOne({

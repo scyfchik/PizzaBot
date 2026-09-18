@@ -83,8 +83,16 @@ export const Permission = Object.freeze({
   /** Assign testers, change bug status, close reports. */
   QA_MANAGE: 'qa.manage',
 
-  // Development communication
-  CHANGELOG_PUBLISH: 'changelog.publish',
+  // Player analytics — the studio-facing half of the bot
+  PLAYER_VIEW: 'player.view',
+  /** Economy and purchase detail, which is commercially sensitive. */
+  PLAYER_ECONOMY: 'player.economy',
+  /** Link or unlink someone else's Roblox account. */
+  PLAYER_LINK_MANAGE: 'player.link',
+
+  // Live game data
+  GAME_STATS: 'game.stats',
+  GAME_EVENTS: 'game.events',
 
   // Security
   SECURITY_ALERTS: 'security.alerts', // pinged for alerts
@@ -155,9 +163,13 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.PANEL_MANAGE,
       Permission.QA_VIEW,
       Permission.QA_MANAGE,
-      Permission.CHANGELOG_PUBLISH,
       Permission.STAFF_ACTIVITY,
       Permission.STAFF_LEADERBOARD,
+      Permission.PLAYER_VIEW,
+      Permission.PLAYER_ECONOMY,
+      Permission.PLAYER_LINK_MANAGE,
+      Permission.GAME_STATS,
+      Permission.GAME_EVENTS,
     ],
   },
   {
@@ -172,7 +184,10 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.CONFIG_VIEW,
       Permission.QA_VIEW,
       Permission.QA_MANAGE,
-      Permission.CHANGELOG_PUBLISH,
+      Permission.PLAYER_VIEW,
+      Permission.PLAYER_ECONOMY,
+      Permission.GAME_STATS,
+      Permission.GAME_EVENTS,
     ],
   },
   {
@@ -190,6 +205,9 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.QA_MANAGE,
       Permission.STAFF_ACTIVITY,
       Permission.STAFF_LEADERBOARD,
+      Permission.PLAYER_VIEW,
+      Permission.GAME_STATS,
+      Permission.GAME_EVENTS,
     ],
   },
   {
@@ -202,6 +220,8 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.TICKET_CLOSE,
       Permission.CASE_VIEW,
       Permission.QA_VIEW,
+      Permission.PLAYER_VIEW,
+      Permission.GAME_STATS,
     ],
   },
   {
@@ -226,6 +246,10 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.QA_VIEW,
       Permission.STAFF_ACTIVITY,
       Permission.STAFF_LEADERBOARD,
+      Permission.PLAYER_VIEW,
+      Permission.PLAYER_ECONOMY,
+      Permission.PLAYER_LINK_MANAGE,
+      Permission.GAME_STATS,
     ],
   },
   {
@@ -246,6 +270,7 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.CASE_VIEW,
       Permission.CASE_APPEAL,
       Permission.STAFF_NOTES,
+      Permission.PLAYER_VIEW,
     ],
   },
   {
@@ -325,6 +350,60 @@ export const BugStatusMeta = Object.freeze({
   TESTING: { label: '🟡 Testing', color: 0xfaa61a },
   FIXED: { label: '🟢 Fixed', color: 0x43b581 },
   REJECTED: { label: '⚫ Rejected', color: 0x2b2d31 },
+});
+
+/**
+ * Ticket outcome, for categories where "closed" is not the whole story.
+ * A ban appeal that was closed tells you nothing; one that was Denied does.
+ */
+export const TicketDecision = Object.freeze({
+  PENDING: 'pending',
+  ACCEPTED: 'accepted',
+  DENIED: 'denied',
+  RESOLVED: 'resolved',
+  NO_ACTION: 'no_action',
+});
+
+export const TicketDecisionMeta = Object.freeze({
+  pending: { label: '⏳ Pending', color: 0xfaa61a },
+  accepted: { label: '✅ Accepted', color: 0x43b581 },
+  denied: { label: '❌ Denied', color: 0xed4245 },
+  resolved: { label: '✅ Resolved', color: 0x43b581 },
+  no_action: { label: '⚪ No action', color: 0x2b2d31 },
+});
+
+/**
+ * Events the Roblox game reports to the bot.
+ *
+ * None of this is queryable from Roblox — the game sends it. Anything not on
+ * this list is rejected at the ingest boundary rather than stored blindly.
+ */
+export const GameEventType = Object.freeze({
+  PLAYER_JOIN: 'player_join',
+  PLAYER_LEAVE: 'player_leave',
+  PLAYER_DEATH: 'player_death',
+  LEVEL_UP: 'level_up',
+  PURCHASE_COMPLETED: 'purchase_completed',
+  PURCHASE_FAILED: 'purchase_failed',
+  RARE_ITEM: 'rare_item',
+  ADMIN_COMMAND: 'admin_command',
+  SERVER_START: 'server_start',
+  SERVER_SHUTDOWN: 'server_shutdown',
+  ERROR: 'error',
+});
+
+/** Events worth surfacing to staff rather than only storing. */
+export const NOTABLE_GAME_EVENTS = Object.freeze([
+  GameEventType.PURCHASE_FAILED,
+  GameEventType.ADMIN_COMMAND,
+  GameEventType.ERROR,
+]);
+
+export const PurchaseStatus = Object.freeze({
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  REFUNDED: 'refunded',
+  PENDING: 'pending',
 });
 
 /** Platforms the game runs on — used by bug reports. */

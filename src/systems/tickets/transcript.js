@@ -37,6 +37,38 @@ export async function fetchMessages(channel, limit = MAX_MESSAGES) {
   return collected.reverse();
 }
 
+/**
+ * Convert fetched messages into the structure the web viewer stores.
+ *
+ * Kept separate from rendering so the same capture feeds both the database
+ * record and the fallback HTML file — one pass over the channel, two outputs.
+ */
+export function toTranscriptMessages(messages, staffIds = new Set()) {
+  return messages.map((message) => ({
+    id: message.id,
+    authorId: message.author?.id ?? null,
+    authorTag: message.author?.tag ?? 'Unknown',
+    authorAvatar: message.author?.displayAvatarURL?.({ size: 64, extension: 'png' }) ?? null,
+    bot: Boolean(message.author?.bot),
+    isStaff: staffIds.has(message.author?.id),
+    content: message.content ?? '',
+    createdAt: new Date(message.createdTimestamp),
+    editedAt: message.editedTimestamp ? new Date(message.editedTimestamp) : null,
+    attachments: [...(message.attachments?.values() ?? [])].map((a) => ({
+      name: a.name,
+      url: a.url,
+      contentType: a.contentType ?? null,
+      size: a.size ?? null,
+    })),
+    embeds: (message.embeds ?? []).slice(0, 3).map((e) => ({
+      title: e.title ?? null,
+      description: e.description ?? null,
+      color: e.color ?? null,
+      fields: (e.fields ?? []).slice(0, 5).map((f) => ({ name: f.name, value: f.value })),
+    })),
+  }));
+}
+
 export async function generateTranscript(channel, ticket) {
   const messages = await fetchMessages(channel);
   const html = renderHtml(messages, ticket, channel.guild);
@@ -52,6 +84,8 @@ export async function generateTranscript(channel, ticket) {
     path,
     fileName,
     messageCount: messages.length,
+    /** Raw messages, so the caller can also build the web transcript record. */
+    raw: messages,
     attachment: new AttachmentBuilder(Buffer.from(html, 'utf8'), { name: fileName }),
   };
 }

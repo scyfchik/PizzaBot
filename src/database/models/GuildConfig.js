@@ -64,6 +64,15 @@ const guildConfigSchema = new mongoose.Schema(
       disabledCategories: { type: [String], default: [] },
       transcriptsEnabled: { type: Boolean, default: true },
       dmTranscriptToUser: { type: Boolean, default: true },
+      /** Store a web-viewable transcript and include its private link. */
+      webTranscriptsEnabled: { type: Boolean, default: true },
+      /**
+       * Days a transcript link stays alive. 0 keeps it indefinitely.
+       *
+       * Defaults to 90 rather than forever: transcripts hold personal data, and
+       * a link that works for years is a slow leak waiting to happen.
+       */
+      transcriptExpiryDays: { type: Number, default: 90 },
     },
 
     security: {
@@ -85,8 +94,18 @@ const guildConfigSchema = new mongoose.Schema(
         lockdownMinutes: { type: Number, default: 15 },
       },
 
+      /**
+       * Anti-spam and content filtering.
+       *
+       * **Off by default.** Pizza Bot is the studio's operational tool, and
+       * general chat moderation belongs to Dyno/Carl-bot — running two bots
+       * that both delete messages produces double punishments and arguments
+       * about which one did it. The implementation is kept and tested, so a
+       * server without another automod bot can switch it on with
+       * `/config security anti-spam:true`.
+       */
       antiSpam: {
-        enabled: { type: Boolean, default: true },
+        enabled: { type: Boolean, default: false },
         messageThreshold: { type: Number, default: 6 },
         windowSeconds: { type: Number, default: 5 },
         duplicateThreshold: { type: Number, default: 3 },
@@ -106,8 +125,8 @@ const guildConfigSchema = new mongoose.Schema(
        * only ever judged and deleted once.
        */
       autoMod: {
-        /** Free robux, nitro scams, fake verification links. */
-        scamDetection: { type: Boolean, default: true },
+        /** Free robux, nitro scams, fake verification links. Off by default. */
+        scamDetection: { type: Boolean, default: false },
         /** delete | delete_warn | delete_timeout */
         scamAction: { type: String, default: 'delete_timeout' },
 
@@ -177,13 +196,14 @@ const guildConfigSchema = new mongoose.Schema(
       pingOnCriticalOnly: { type: Boolean, default: true },
     },
 
-    /** Developer update announcements. */
-    changelog: {
-      channelId,
-      /** Role pinged when an update is published. */
-      pingRoleId: { type: String, default: null },
-      /** Default credit line, so it does not have to be retyped every release. */
-      defaultCredits: { type: String, default: null },
+    /** Live game data reported by the Roblox experience. */
+    game: {
+      /** Where notable in-game events are mirrored. */
+      eventChannelId: channelId,
+      /** Ping this role on reported errors and failed purchases. */
+      alertRoleId: { type: String, default: null },
+      /** Shown on player profiles when the game reports a version. */
+      currentVersion: { type: String, default: null },
     },
 
     /** Reserved — read by the Roblox services when that integration lands. */

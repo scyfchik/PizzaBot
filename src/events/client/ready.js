@@ -4,6 +4,10 @@ import { StaffActivityService } from '../../systems/staff/StaffActivityService.j
 import { ModerationService } from '../../systems/moderation/ModerationService.js';
 import { TicketManager } from '../../systems/tickets/TicketManager.js';
 import { BugReportService } from '../../systems/qa/BugReportService.js';
+import { GameDataService } from '../../systems/game/GameDataService.js';
+import { TranscriptServer } from '../../web/TranscriptServer.js';
+import { IngestHandler } from '../../web/ingest.js';
+import { env } from '../../config/env.js';
 import { SecurityService } from '../../systems/security/SecurityService.js';
 import { AntiSpam } from '../../systems/security/AntiSpam.js';
 import { AntiRaid } from '../../systems/security/AntiRaid.js';
@@ -38,6 +42,21 @@ export async function execute(client) {
   );
   client.registerSystem('tickets', new TicketManager(client, logging, activity));
   client.registerSystem('qa', new BugReportService(client, logging, activity));
+
+  const gameData = client.registerSystem('gameData', new GameDataService(client, logging));
+
+  // The web server: transcript viewer plus, when a key is configured, the
+  // game's ingest endpoint. Registered before the config warm-up so a failure
+  // to bind the port surfaces immediately rather than after the bot looks ready.
+  const ingest = new IngestHandler(gameData, env.discord.guildId);
+  const web = client.registerSystem('web', new TranscriptServer(ingest));
+  try {
+    await web.start();
+  } catch (err) {
+    // A port clash must not take the bot offline — tickets still close, they
+    // just fall back to the attached HTML file.
+    log.error({ err }, 'Transcript web viewer failed to start — falling back to file transcripts');
+  }
 
   const security = client.registerSystem('security', new SecurityService(client, logging));
   const lockdown = client.registerSystem('lockdown', new Lockdown(client, security));

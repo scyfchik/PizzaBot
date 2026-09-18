@@ -1,5 +1,6 @@
 import { Ticket } from '../../database/models/Ticket.js';
-import { TicketStatus, Permission } from '../../config/constants.js';
+import { TicketStatus, Permission, TicketDecisionMeta } from '../../config/constants.js';
+import { parseDecision } from '../../systems/tickets/components.js';
 import { hasPermission } from '../../systems/staff/permissions.js';
 import { embeds, padNumber } from '../../utils/embeds.js';
 import { UserError, PermissionError } from '../../core/errors.js';
@@ -21,6 +22,8 @@ export const actions = ['confirmclose'];
 export async function execute(interaction, { client, staff, args }) {
   const ticketId = Number(args[0]);
   const reason = interaction.fields.getTextInputValue('reason').trim();
+  const decision = parseDecision(interaction.fields.getTextInputValue('outcome'));
+  const summary = interaction.fields.getTextInputValue('summary')?.trim() || null;
 
   await interaction.deferReply();
 
@@ -37,10 +40,13 @@ export async function execute(interaction, { client, staff, args }) {
     embeds: [
       embeds
         .warning(`Closing ticket **#${padNumber(ticketId)}** — saving the transcript…`)
-        .setFooter({ text: `Closed by ${interaction.user.tag}` }),
+        .setFooter({ text: `${TicketDecisionMeta[decision].label} · closed by ${interaction.user.tag}` }),
     ],
   });
 
   const tickets = client.getSystem('tickets');
-  await tickets.close(ticketId, interaction.guildId, interaction.user, reason);
+  await tickets.close(ticketId, interaction.guildId, interaction.user, reason, {
+    decision,
+    summary,
+  });
 }

@@ -41,7 +41,7 @@ const bugReportSchema = new mongoose.Schema(
     resolvedBy: { type: String, default: null },
     resolvedAt: { type: Date, default: null },
     resolutionNote: { type: String, default: null },
-    /** Changelog version this shipped in, once one exists. */
+    /** Free-text game version this was fixed in, e.g. "0.5.1". */
     fixedInVersion: { type: String, default: null },
 
     /** Every status transition, so a rejected-then-reopened bug is legible. */

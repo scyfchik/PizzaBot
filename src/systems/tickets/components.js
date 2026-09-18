@@ -9,7 +9,13 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import { buildId } from '../../utils/ids.js';
-import { Colors, Emojis, TicketStatus } from '../../config/constants.js';
+import {
+  Colors,
+  Emojis,
+  TicketStatus,
+  TicketDecision,
+  TicketDecisionMeta,
+} from '../../config/constants.js';
 import { field, padNumber, userLabel, truncate } from '../../utils/embeds.js';
 import { fullTimestamp } from '../../utils/time.js';
 import { getCategory, enabledCategories } from './categories.js';
@@ -179,12 +185,31 @@ export function ticketControls(ticketId, { claimed = false, closed = false } = {
   return [row];
 }
 
-/** Confirmation step — closing is destructive and easy to misclick. */
+/**
+ * Confirmation step — closing is destructive and easy to misclick.
+ *
+ * The outcome is a separate field rather than something to infer from the
+ * reason text. "Closed" tells a future reader nothing about a ban appeal;
+ * "Denied" tells them everything, and it is what the transcript header and
+ * `/tickets list` show.
+ *
+ * Discord modals accept text inputs only — no select menus — so the outcome is
+ * typed and parsed leniently.
+ */
 export function closeConfirmModal(ticketId) {
   return new ModalBuilder()
     .setCustomId(buildId('ticket', 'confirmclose', ticketId))
     .setTitle(`Close ticket #${padNumber(ticketId)}`)
     .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('outcome')
+          .setLabel('Outcome')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(20)
+          .setPlaceholder('accepted / denied / resolved / no action — defaults to resolved'),
+      ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('reason')
@@ -194,7 +219,31 @@ export function closeConfirmModal(ticketId) {
           .setMaxLength(500)
           .setPlaceholder('What was the outcome? This is saved to the ticket record.'),
       ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('summary')
+          .setLabel('One-line summary (optional)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(120)
+          .setPlaceholder('e.g. Spam punishment appeal'),
+      ),
     );
+}
+
+/**
+ * Map typed text onto a decision.
+ * Lenient on purpose: staff type "accept", "Accepted", "approved" and mean the
+ * same thing, and rejecting the close over a typo would be absurd.
+ */
+export function parseDecision(input) {
+  const value = String(input ?? '').trim().toLowerCase();
+  if (!value) return TicketDecision.RESOLVED;
+  if (/^acc?ept|approv|grant|unban/.test(value)) return TicketDecision.ACCEPTED;
+  if (/^den|reject|decline|refus/.test(value)) return TicketDecision.DENIED;
+  if (/^no.?action|ignor|invalid|dupl/.test(value)) return TicketDecision.NO_ACTION;
+  if (/^pend/.test(value)) return TicketDecision.PENDING;
+  return TicketDecision.RESOLVED;
 }
 
 // ---------------------------------------------------------------- logs
@@ -257,7 +306,7 @@ export function unclaimAnnouncement(staffUser) {
     .setTimestamp();
 }
 
-export function ticketClosedLog(ticket) {
+export function ticketClosedLog(ticket, viewerUrl = null) {
   const category = getCategory(ticket.category);
   const embed = new EmbedBuilder()
     .setColor(Colors.NEUTRAL)
@@ -276,6 +325,18 @@ export function ticketClosedLog(ticket) {
   }
   if (ticket.resolutionTimeMs != null) {
     embed.addFields(field('Open for', humanMs(ticket.resolutionTimeMs), true));
+  }
+
+  // The link carries the access token, so it goes only here — the ticket log,
+  // which is staff-only — and to the opener's DMs. Never into a public channel.
+  if (viewerUrl) {
+    embed.addFields(
+      field(
+        `${Emojis.TRANSCRIPT} Transcript`,
+        `[Open the web transcript](${viewerUrl})\n` +
+          '*Private link — anyone who has it can read this ticket.*',
+      ),
+    );
   }
 
   return embed;

@@ -1,13 +1,24 @@
 # Pizza Guy's Time — Community Infrastructure Bot
 
-Internal Discord bot for the Pizza Guy's Time Roblox studio community.
+The internal operations panel for the Pizza Guy's Time Roblox studio.
 
-Scope is intentionally narrow — **security, player support, tickets, moderation
-and staff operations**. Rules messages, FAQ embeds, welcome messages and basic
-automod are handled by Dyno/Carl-bot; this bot does not duplicate them.
+Not a general-purpose Discord bot, and deliberately not a replacement for
+Dyno/Carl-bot/Ticket Tool. Those handle chat moderation, antispam, verification,
+rules and welcome messages. **Pizza Bot handles the studio's own processes:**
+support tickets, player analytics, staff activity, game monitoring, economy
+tracking and security audit — the things no off-the-shelf bot can do because
+they need your game's data.
 
-- **Setting it up for the first time on Windows:** [`docs/SETUP-WINDOWS.md`](docs/SETUP-WINDOWS.md)
+> **One thing to understand first:** playtime, levels, Robux spent and in-game
+> events are **not readable from Roblox**. No API exposes them. Your game sends
+> them to the bot. Until you wire that up, those features honestly report "no
+> game data" rather than showing zeroes. See
+> [`docs/GAME-INTEGRATION.md`](docs/GAME-INTEGRATION.md).
+
+- **First-time setup on Windows:** [`docs/SETUP-WINDOWS.md`](docs/SETUP-WINDOWS.md)
+- **Connecting your Roblox game:** [`docs/GAME-INTEGRATION.md`](docs/GAME-INTEGRATION.md)
 - Full design and reasoning: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Current state, tested vs untested: [`docs/STATUS.md`](docs/STATUS.md)
 
 ---
 
@@ -15,45 +26,69 @@ automod are handled by Dyno/Carl-bot; this bot does not duplicate them.
 
 | System | What it does |
 |---|---|
-| **Tickets** | 6 categories with per-category forms, sequential numbering, claim/close/transcript buttons, HTML transcripts, response-time metrics, internal notes |
-| **Security** | Anti-raid (join waves, new-account waves, username patterns, reversible quarantine, snapshot-based lockdown), anti-spam (rate, duplicate, mention, emoji, link, invite + strike escalation), anti-nuke (**defensive — never auto-bans; holds actions against senior staff for human confirmation**) |
-| **Moderation** | `/warn` `/kick` `/ban` `/unban` `/timeout` `/clear` `/history`, permanent case log with evidence, staff notes and appeal status, auto-escalation, temp-punishment expiry |
-| **Staff** | Role-driven permissions, case management, audit trail, **activity counters and leaderboard** |
-| **AutoMod** | Scam-pattern detection (free-robux, nitro, phishing, credential requests) and a configurable word blacklist, folded into the anti-spam pass |
-| **QA** | Bug reports with OPEN → TESTING → FIXED / REJECTED lifecycle, tester assignment, synced board channel, full transition history |
-| **Community** | Player profiles, Roblox account linking, game update announcements |
+| **Support tickets** | 6 categories with per-category forms, sequential numbering, claim/unclaim/close, outcome tracking (Accepted/Denied/Resolved), response-time metrics, queue view |
+| **Transcripts** | Web viewer with summary, timeline, player context and purchase history above a Discord-style chat log — searchable, mobile-friendly, print-to-PDF, behind an unguessable expiring link |
+| **Player analytics** | One lookup for Discord, Roblox, playtime, level, spend, tickets, warnings and bugs |
+| **Economy** | Per-player transaction history including failures, deduplicated on Roblox's receipt id |
+| **Game monitoring** | Live player counts, active servers, event feed, connection health |
+| **Staff activity** | Counters incremented at the point of action; activity panel and leaderboard |
+| **QA** | Bug reports with OPEN → TESTING → FIXED / REJECTED, tester assignment, synced board |
+| **Security** | Anti-nuke (**defensive — never auto-bans; holds actions against senior staff for human confirmation**), anti-raid, snapshot-based lockdown, searchable audit log |
+| **Moderation** | Case log with evidence and appeal status — kept because ban appeals and player profiles need the history, not to compete with your automod bot |
 | **Logging** | Separate embed feeds for security, moderation, tickets, staff and server events |
-| **Roblox** | Storage, commands and manual verification live; **the API itself is still not implemented** |
+
+**Off by default**, because other bots do them better: anti-spam, scam
+detection, the word blacklist. The implementations are kept and tested — a
+server with no other automod bot can enable them with
+`/config security anti-spam:true`.
 
 ### Commands
 
+Everything is grouped under a noun, so related things live together.
+
 ```
-Setup & config
-  /setup       initialise and check what still needs configuring
-  /config      ranks · nodes · channels · tickets · security · automod · qa · changelog · roblox
-  /panel       post or refresh the ticket panel
+Players
+  /player profile     Discord + Roblox + game stats + support history
+  /player history     moderation and support record
+  /player economy     spend summary
+  /player purchases   transactions, including failures
+  /player link        link a Roblox account   (/player unlink)
 
 Support
-  /ticket      add · note · priority · transfer · info
+  /tickets list       browse the queue        (/tickets queue, /tickets stats)
+  /ticket view        one ticket              (/ticket history <member>)
+  /ticket add · note · priority · transfer
+  /transcript link · revoke · info
 
-Moderation & security
-  /warn  /timeout  /kick  /ban  /unban  /clear
-  /case        view · reason · evidence · note · appeal · void
-  /history     a member's full record
-  /lockdown    enable · disable · status
+Game
+  /game stats         players online, servers, spend
+  /game events        raw reported event feed
+  /game connection    is the game wired up?
 
 Staff
-  /staffinfo   rank, permissions and recent activity
-  /staff       activity · leaderboard
+  /staff profile      rank, permissions, recent activity
+  /staff activity     full counter breakdown
+  /staff leaderboard  most active staff
 
 QA
-  /bug         report · view · list · assign · status · stats
+  /bug report · view · list · assign · status · stats
 
-Community & development
-  /profile     player profile (public-safe)
-  /verify      link · status · approve · unlink
-  /changelog   publish · view · list
+Security
+  /security logs      searchable audit trail  (/security summary)
+  /security lockdown · unlock · status
+
+Moderation (record-keeping)
+  /warn  /timeout  /kick  /ban  /unban  /clear
+  /case view · reason · evidence · note · appeal · void
+
+Setup
+  /setup   /config   /panel
 ```
+
+Renamed from earlier versions: `/staffinfo` → `/staff profile`, `/history` →
+`/player history`, `/profile` → `/player profile`, `/verify` → `/player link`,
+`/lockdown` → `/security lockdown`. `/changelog` was removed — announcements
+belong in a bot built for them.
 
 ### Permissions
 
@@ -215,7 +250,15 @@ Checklist:
   not come back.
 - **Cases are never deleted**, only voided, with the voiding itself recorded.
 - **Transcripts may contain personal data** shared in tickets. Treat the
-  `transcripts/` directory as sensitive.
+  `transcripts/` directory and the `Transcript` collection as sensitive.
+- **A transcript link is a password.** Anyone holding the URL can read the whole
+  ticket — there is no login. Links go only to the staff ticket log and the
+  opener's DMs, expire after 90 days by default, and can be killed with
+  `/transcript revoke`. Only the hash is stored, so a lost link is regenerated
+  with `/transcript link`, never recovered.
+- **The web viewer binds to `127.0.0.1` by default.** Put a reverse proxy with
+  TLS in front before exposing it; `npm run doctor` fails the run if it finds
+  plain HTTP bound to a public interface.
 
 ---
 

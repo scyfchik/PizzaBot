@@ -1,4 +1,7 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { Punishment } from '../../database/models/Punishment.js';
+import { Ticket } from '../../database/models/Ticket.js';
+import { StaffActivity } from '../../database/models/StaffActivity.js';
 import { Permission, Emojis } from '../../config/constants.js';
 import { resolveStaff, rankLabel, hasPermission } from '../../systems/staff/permissions.js';
 import { embeds, field, userLabel } from '../../utils/embeds.js';
@@ -19,6 +22,15 @@ export const data = new SlashCommandBuilder()
   .setName('staff')
   .setDescription('Staff activity tools')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+  .addSubcommand((sub) =>
+    sub
+      .setName('profile')
+      .setDescription('Rank, permissions and recent activity')
+      .addUserOption((o) => o.setName('member').setDescription('Defaults to you'))
+      .addIntegerOption((o) =>
+        o.setName('days').setDescription('Activity window (default 30)').setMinValue(1).setMaxValue(365),
+      ),
+  )
   .addSubcommand((sub) =>
     sub
       .setName('activity')
@@ -42,11 +54,92 @@ export const meta = {
 
 export async function execute(interaction, { client, staff }) {
   const activity = client.getSystem('staffActivity');
+  const sub = interaction.options.getSubcommand();
 
-  if (interaction.options.getSubcommand() === 'leaderboard') {
-    return leaderboard(interaction, activity, staff);
-  }
+  if (sub === 'leaderboard') return leaderboard(interaction, activity, staff);
+  if (sub === 'profile') return staffProfile(interaction, staff);
   return activityPanel(interaction, activity, staff);
+}
+
+/**
+ * Rank and permissions.
+ *
+ * The permission list is generated from live config, so this doubles as the
+ * answer to "why can't I run that command?".
+ */
+async function staffProfile(interaction, staff) {
+  const member = interaction.options.getMember('member') ?? interaction.member;
+  if (!member) throw new UserError('That member is not in the server.');
+
+  const isSelf = member.id === interaction.user.id;
+  if (!isSelf && !hasPermission(staff, Permission.STAFF_INFO)) {
+    throw new PermissionError("You can view your own profile, but not another staff member's.");
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const days = interaction.options.getInteger('days') ?? 30;
+  const since = new Date(Date.now() - days * 86_400_000);
+  const guildId = interaction.guildId;
+
+  const [target, recentActions, ticketsClosed, breakdown, lifetime] = await Promise.all([
+    resolveStaff(member),
+    Punishment.countDocuments({ guildId, moderatorId: member.id, createdAt: { $gte: since } }),
+    Ticket.countDocuments({ guildId, closedBy: member.id, closedAt: { $gte: since } }),
+    Punishment.aggregate([
+      { $match: { guildId, moderatorId: member.id, createdAt: { $gte: since } } },
+      { $group: { _id: '$type', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]),
+    StaffActivity.findOne({ guildId, userId: member.id }).lean(),
+  ]);
+
+  const embed = embeds
+    .brand(`${Emojis.SHIELD} Staff profile`)
+    .setThumbnail(member.user.displayAvatarURL())
+    .addFields(
+      field('Member', userLabel(member.user), true),
+      field('Rank', rankLabel(target), true),
+      field(
+        'Joined server',
+        member.joinedAt ? timestamp(member.joinedAt, 'R') : '—',
+        true,
+      ),
+    );
+
+  if (!target.isStaff) {
+    embed.addFields(
+      field('Status', 'Not staff — holds no role mapped to a rank in `/config rank`.'),
+    );
+    return interaction.editReply({ embeds: [embed] });
+  }
+
+  embed.addFields(
+    field(
+      `Last ${days} days`,
+      `Moderation actions **${recentActions}** · Tickets closed **${ticketsClosed}**` +
+        (breakdown.length ? `\n${breakdown.map((b) => `${b._id}: **${b.count}**`).join(' · ')}` : ''),
+    ),
+    field(
+      'All time',
+      `Actions **${lifetime?.totals?.actions ?? 0}** · ` +
+        `Tickets closed **${lifetime?.tickets?.closed ?? 0}** · ` +
+        `Bugs closed **${lifetime?.qa?.reportsClosed ?? 0}**\nBreakdown: \`/staff activity\``,
+    ),
+  );
+
+  const permissions = target.permissions.has(Permission.ALL)
+    ? ['**Everything** (wildcard)']
+    : [...target.permissions].sort().map((p) => `\`${p}\``);
+  embed.addFields(field(`Permissions (${permissions.length})`, permissions.join(' ')));
+
+  if (target.protected) {
+    embed.setFooter({
+      text: 'Protected rank — security systems will not act against this member automatically.',
+    });
+  }
+
+  await interaction.editReply({ embeds: [embed] });
 }
 
 async function activityPanel(interaction, activity, staff) {

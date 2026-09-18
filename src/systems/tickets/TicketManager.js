@@ -15,7 +15,9 @@ import {
   ticketUnclaimedLog,
   ticketClosedLog,
 } from './components.js';
-import { generateTranscript } from './transcript.js';
+import { generateTranscript, toTranscriptMessages } from './transcript.js';
+import { Transcript, generateToken, hashToken } from '../../database/models/Transcript.js';
+import { RobloxProfile } from '../../database/models/RobloxProfile.js';
 import { embeds, padNumber, field } from '../../utils/embeds.js';
 import { safeAction, trySendDM } from '../../utils/safeAction.js';
 import { hasPermission } from '../staff/permissions.js';
@@ -25,6 +27,50 @@ const log = createLogger('tickets');
 
 /** Grace period between closing a ticket and deleting its channel. */
 const DELETE_DELAY_MS = 5000;
+
+/**
+ * The ticket's life as a list of moments.
+ *
+ * Built from the fields the ticket already carries rather than by scanning the
+ * message history — it is the same information, but a reader should not have to
+ * reconstruct "when was this claimed" by scrolling.
+ */
+function buildTimeline(ticket) {
+  const entries = [
+    { at: ticket.createdAt, label: 'Created', actor: ticket.openerTag },
+  ];
+
+  if (ticket.claimedAt) {
+    entries.push({ at: ticket.claimedAt, label: 'Claimed', actor: ticket.claimedByTag });
+  }
+
+  // First response is stored as a duration, so turn it back into a moment.
+  if (ticket.firstResponseMs != null && ticket.createdAt) {
+    entries.push({
+      at: new Date(new Date(ticket.createdAt).getTime() + ticket.firstResponseMs),
+      label: 'First staff reply',
+      actor: ticket.claimedByTag ?? 'Staff',
+    });
+  }
+
+  if (ticket.closedAt) {
+    entries.push({ at: ticket.closedAt, label: 'Closed', actor: ticket.closedByTag });
+  }
+
+  return entries
+    .filter((e) => e.at)
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+}
+
+/**
+ * Messages stored per web transcript.
+ *
+ * A Mongo document is capped at 16MB. A ticket with thousands of long messages
+ * could approach that, and a single oversized document would fail to save and
+ * lose the transcript entirely — so the newest N are kept and the viewer says
+ * so. The full conversation is still in the HTML file attached to the log.
+ */
+const WEB_TRANSCRIPT_MESSAGE_CAP = 1000;
 
 /**
  * The ticket workflow.
@@ -344,7 +390,7 @@ export class TicketManager {
    * Each step is independently guarded — a member with closed DMs must not
    * stop the ticket from closing.
    */
-  async close(ticketId, guildId, closer, reason) {
+  async close(ticketId, guildId, closer, reason, { decision = null, summary = null } = {}) {
     const ticket = await this.#require(ticketId, guildId);
     if (ticket.status === TicketStatus.CLOSED) throw new UserError('That ticket is already closed.');
     // Two people clicking Close within the transcript window would otherwise
@@ -377,6 +423,8 @@ export class TicketManager {
     ticket.closedByTag = closer.tag ?? closer.user?.tag;
     ticket.closedAt = new Date();
     ticket.closeReason = reason;
+    if (decision) ticket.decision = decision;
+    if (summary) ticket.summary = summary;
     ticket.resolutionTimeMs = Date.now() - new Date(ticket.createdAt).getTime();
     if (transcript) {
       ticket.transcript = {
@@ -386,6 +434,18 @@ export class TicketManager {
       };
     }
     await ticket.save();
+
+    // Web transcript record, built from the same capture. Guarded separately:
+    // the HTML file is the fallback, so a failure here must neither stop the
+    // ticket closing nor lose the attachment that already exists.
+    let viewerUrl = null;
+    if (transcript && config.tickets.webTranscriptsEnabled !== false) {
+      try {
+        viewerUrl = await this.#storeWebTranscript(guild, ticket, transcript, config);
+      } catch (err) {
+        log.error({ err, ticketId }, 'Failed to store web transcript — falling back to the file');
+      }
+    }
 
     // Let the opener keep a copy — they lose channel access in a moment.
     if (config.tickets.dmTranscriptToUser) {
@@ -397,6 +457,16 @@ export class TicketManager {
           .addFields(field('Reason', reason))
           .setFooter({ text: guild.name });
 
+        if (viewerUrl) {
+          summary.addFields(
+            field(
+              'Your transcript',
+              `[Read it online](${viewerUrl})\n` +
+                '*Keep this link private — anyone who has it can read the whole ticket.*',
+            ),
+          );
+        }
+
         await trySendDM(opener, {
           embeds: [summary],
           files: transcript ? [transcript.attachment] : [],
@@ -404,7 +474,7 @@ export class TicketManager {
       }
     }
 
-    const logMessage = await this.logs.tickets(guildId, ticketClosedLog(ticket), {
+    const logMessage = await this.logs.tickets(guildId, ticketClosedLog(ticket, viewerUrl), {
       files: transcript ? [transcript.attachment] : undefined,
     });
     if (logMessage) {
@@ -425,6 +495,150 @@ export class TicketManager {
 
     log.info({ ticketId, closer: closer.id }, 'Ticket closed');
     return ticket;
+  }
+
+  /**
+   * Persist the web transcript and return its private link.
+   *
+   * The token is generated here and returned in the URL; only its hash is
+   * stored. That means this is the one and only moment the plaintext token
+   * exists — it goes into the ticket log and the opener's DM, and nowhere else.
+   * If both of those are lost, the link is unrecoverable by design.
+   */
+  async #storeWebTranscript(guild, ticket, transcript, config) {
+    const web = this.client.getSystem('web');
+    if (!web?.enabled) return null;
+
+    const category = getCategory(ticket.category);
+
+    // Staff at the time of writing, so the viewer can badge their messages.
+    const staffIds = new Set();
+    for (const rank of config.staffRanks ?? []) {
+      if (!rank.permissions?.length) continue;
+      for (const roleId of rank.roleIds ?? []) {
+        const role = guild.roles.cache.get(roleId);
+        for (const memberId of role?.members?.keys() ?? []) staffIds.add(memberId);
+      }
+    }
+
+    const all = toTranscriptMessages(transcript.raw ?? [], staffIds);
+    const truncated = all.length > WEB_TRANSCRIPT_MESSAGE_CAP;
+    // Keep the most recent, which is where the resolution lives.
+    const messages = truncated ? all.slice(-WEB_TRANSCRIPT_MESSAGE_CAP) : all;
+
+    const token = generateToken();
+    const expiryDays = config.tickets.transcriptExpiryDays ?? 90;
+
+    await Transcript.create({
+      guildId: guild.id,
+      ticketId: ticket.ticketId,
+      tokenHash: hashToken(token),
+      meta: {
+        category: ticket.category,
+        categoryLabel: category?.label ?? ticket.category,
+        guildName: guild.name,
+        channelName: ticket.channelName,
+        openerId: ticket.openerId,
+        openerTag: ticket.openerTag,
+        robloxUsername: ticket.robloxUsername,
+        claimedBy: ticket.claimedBy,
+        claimedByTag: ticket.claimedByTag,
+        closedBy: ticket.closedBy,
+        closedByTag: ticket.closedByTag,
+        closeReason: ticket.closeReason,
+        createdAt: ticket.createdAt,
+        closedAt: ticket.closedAt,
+        firstResponseMs: ticket.firstResponseMs,
+        resolutionTimeMs: ticket.resolutionTimeMs,
+        decision: ticket.decision,
+        summary: ticket.summary,
+        responses: ticket.responses,
+      },
+      timeline: buildTimeline(ticket),
+      playerContext: await this.#buildPlayerContext(guild, ticket),
+      messages,
+      messageCount: all.length,
+      truncated,
+      // 0 means keep indefinitely; anything else sets the TTL.
+      expiresAt: expiryDays > 0 ? new Date(Date.now() + expiryDays * 86_400_000) : null,
+    });
+
+    log.info(
+      { ticketId: ticket.ticketId, messages: messages.length, truncated },
+      'Web transcript stored',
+    );
+
+    return web.buildUrl(token);
+  }
+
+  /**
+   * Snapshot the player's standing at close time.
+   *
+   * Every lookup is guarded individually and the whole thing is best-effort:
+   * richer context is nice, but it must never be the reason a transcript fails
+   * to save. Missing values render as "unknown" rather than zero, because a
+   * confident zero is worse than an honest gap.
+   */
+  async #buildPlayerContext(guild, ticket) {
+    const context = { robloxId: null };
+
+    try {
+      const opener = await this.client.users.fetch(ticket.openerId).catch(() => null);
+      if (opener) {
+        context.accountAgeDays = Math.floor(
+          (Date.now() - opener.createdAt.getTime()) / 86_400_000,
+        );
+      }
+
+      const [previousTickets, activeWarnings, totalPunishments] = await Promise.all([
+        Ticket.countDocuments({
+          guildId: guild.id,
+          openerId: ticket.openerId,
+          ticketId: { $ne: ticket.ticketId },
+        }),
+        Punishment.countDocuments({
+          guildId: guild.id,
+          userId: ticket.openerId,
+          type: 'warn',
+          active: true,
+        }),
+        Punishment.countDocuments({ guildId: guild.id, userId: ticket.openerId }),
+      ]);
+
+      Object.assign(context, { previousTickets, activeWarnings, totalPunishments });
+
+      // Game data, when the player is linked and the game has reported them.
+      const profile = await RobloxProfile.findOne({ discordId: ticket.openerId }).lean();
+      const gameData = this.client.systems.get('gameData');
+      if (!gameData) return context;
+
+      const username = profile?.username ?? ticket.robloxUsername;
+      const stats = profile?.robloxId
+        ? await gameData.getStats(guild.id, profile.robloxId)
+        : username
+          ? await gameData.findByUsername(guild.id, username)
+          : null;
+
+      if (!stats) return context;
+
+      context.robloxId = stats.robloxId;
+      context.playtimeMinutes = stats.activity?.playtimeMinutes ?? null;
+      context.level = stats.progression?.level ?? null;
+      context.robuxSpent = stats.economy?.robuxSpent ?? null;
+
+      const purchases = await gameData.purchases(guild.id, stats.robloxId, 5);
+      context.recentPurchases = purchases.map((p) => ({
+        productName: p.productName ?? p.productId ?? 'Unknown',
+        robuxAmount: p.robuxAmount,
+        status: p.status,
+        transactionId: p.transactionId,
+        purchasedAt: p.purchasedAt,
+      }));
+    } catch (err) {
+      log.warn({ err, ticketId: ticket.ticketId }, 'Could not build full player context');
+    }
+
+    return context;
   }
 
   /**

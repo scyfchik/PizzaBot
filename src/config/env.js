@@ -62,6 +62,24 @@ function idList(key) {
   return [...new Set(ids)];
 }
 
+/** `true`/`1`/`yes` are true; anything else falls back to the default. */
+function bool(key, fallback = false) {
+  const value = optional(key);
+  if (value === null) return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function number(key, fallback) {
+  const value = optional(key);
+  if (value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    errors.push(`${key} must be a port number between 1 and 65535, got: ${value}`);
+    return fallback;
+  }
+  return parsed;
+}
+
 const nodeEnv = optional('NODE_ENV', 'development');
 
 export const env = Object.freeze({
@@ -95,6 +113,46 @@ export const env = Object.freeze({
     }),
   }),
 
+  /**
+   * Transcript web viewer.
+   *
+   * Deployment-level settings, so they live here rather than in the database:
+   * a port and a public hostname are properties of the machine, not of the
+   * guild. Per-guild behaviour (expiry, whether links are generated at all)
+   * stays in GuildConfig.
+   */
+  web: Object.freeze({
+    enabled: bool('WEB_ENABLED', false),
+    port: number('WEB_PORT', 3000),
+    /**
+     * Binds to loopback by default. Publishing user-submitted ticket content
+     * straight onto a public interface should be a deliberate act, not what
+     * happens because someone left a default alone — put a reverse proxy in
+     * front and terminate TLS there, or set this to 0.0.0.0 knowingly.
+     */
+    host: optional('WEB_HOST', '127.0.0.1'),
+    /** Public origin used to build links, e.g. https://tickets.example.com */
+    baseUrl: optional('WEB_BASE_URL')?.replace(/\/+$/, '') ?? null,
+    /** Read X-Forwarded-For for rate limiting. Only enable behind a proxy. */
+    trustProxy: bool('WEB_TRUST_PROXY', false),
+  }),
+
+  /**
+   * Game → bot ingest.
+   *
+   * The shared secret your Roblox game signs its reports with. Store it in the
+   * game's server-side storage only — a key in a LocalScript is a public key.
+   */
+  game: Object.freeze({
+    apiKey: optional('GAME_API_KEY'),
+    /**
+     * Accept a plain `Authorization: Bearer <key>` instead of a signature.
+     * Weaker: anything that observes the request observes the key. Only
+     * sensible over HTTPS, and never the default.
+     */
+    allowBearer: bool('GAME_ALLOW_BEARER', false),
+  }),
+
   /** Reserved for the future Roblox integration — read but never used yet. */
   roblox: Object.freeze({
     groupId: optional('ROBLOX_GROUP_ID'),
@@ -102,6 +160,24 @@ export const env = Object.freeze({
     apiKey: optional('ROBLOX_API_KEY'),
   }),
 });
+
+// A transcript server with no public origin can serve pages but cannot build a
+// working link, which would silently post dead URLs into the ticket log.
+if (env.web.enabled && !env.web.baseUrl) {
+  errors.push('WEB_BASE_URL is required when WEB_ENABLED is true');
+}
+if (env.web.enabled && env.web.baseUrl && !/^https?:\/\//i.test(env.web.baseUrl)) {
+  errors.push(`WEB_BASE_URL must start with http:// or https://, got: ${env.web.baseUrl}`);
+}
+
+// A short shared secret is no secret. 32 characters is the minimum that makes
+// offline guessing pointless.
+if (env.game.apiKey && env.game.apiKey.length < 32) {
+  errors.push('GAME_API_KEY must be at least 32 characters — generate a random one');
+}
+if (env.game.apiKey && !env.web.enabled) {
+  errors.push('GAME_API_KEY is set but WEB_ENABLED is false, so nothing can receive game events');
+}
 
 /**
  * Throws if the environment is unusable. Called once from the entrypoint so a

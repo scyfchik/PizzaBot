@@ -72,6 +72,25 @@ if (env.nodeEnv === 'production' && env.logLevel === 'debug') {
   warn('LOG_LEVEL', 'debug logging in production is noisy and leaks detail');
 }
 
+if (!env.web.enabled) {
+  warn('Transcript viewer', 'disabled — closed tickets fall back to an attached HTML file');
+} else {
+  ok('Transcript viewer', `${env.web.host}:${env.web.port} → ${env.web.baseUrl}`);
+
+  if (env.web.baseUrl?.startsWith('http://') && env.web.host === '0.0.0.0') {
+    fail(
+      'Transcript TLS',
+      'serving transcripts over plain HTTP on a public interface — they contain personal data',
+    );
+  }
+  if (env.web.trustProxy && env.web.host === '0.0.0.0') {
+    warn(
+      'Transcript proxy',
+      'WEB_TRUST_PROXY is on while bound publicly — clients can spoof X-Forwarded-For and bypass rate limits',
+    );
+  }
+}
+
 const nodeMajor = Number(process.versions.node.split('.')[0]);
 if (nodeMajor < 20) {
   fail('Node version', `${process.versions.node} — this project needs 20.10 or newer`);

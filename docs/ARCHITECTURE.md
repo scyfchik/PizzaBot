@@ -1,9 +1,29 @@
 # Pizza Guy's Time — Bot Architecture
 
-Internal community infrastructure for the studio Discord. Scope is deliberately
-narrow: **security, tickets, moderation, staff operations**. Rules, FAQ,
-welcome messages and basic automod stay with Dyno/Carl-bot — this bot does not
-duplicate them.
+The internal operations panel for a Roblox game studio. Deliberately **not** a
+general Discord bot: chat moderation, antispam, verification, rules and welcome
+messages stay with Dyno/Carl-bot, which do them better.
+
+What is left is what no off-the-shelf bot can do, because it needs the studio's
+own data: **support tickets, player analytics, staff activity, game monitoring,
+economy tracking, security audit and transcripts.**
+
+### The constraint that shapes everything
+
+**Roblox exposes no API for playtime, level, Robux spent, purchase history or
+in-game events.** That data exists only on your game servers. So the analytics
+half of this bot is not a client polling Roblox — it is a *receiver*:
+
+```
+  Roblox game ──HMAC-signed POST──► /api/v1/events ──► GameEvent
+                                                       PlayerStats
+                                                       Purchase
+```
+
+Every design decision downstream follows from that: ingest must be idempotent
+(Roblox retries receipts), must not trust its input (a leaked key is a forged
+event), and must degrade honestly (no data means "no data", never a confident
+zero).
 
 ---
 
@@ -106,9 +126,35 @@ src/
 
 ## 2. Database design
 
-Eleven collections.
+Thirteen collections.
 
-### The later four
+### Game data — the studio-specific half
+
+**`PlayerStats`** — keyed on `robloxId`, **not** `discordId`, because most
+players never link a Discord account and their stats still matter. Counters are
+incremented, never recalculated, so ingest stays one `$inc` per event.
+
+**`Purchase`** — one row per transaction, unique on `(guildId, transactionId)`.
+That index *is* the idempotency mechanism: Roblox retries `ProcessReceipt` until
+the game acknowledges it, so the same receipt genuinely arrives several times,
+and the stats increment only runs when the upsert actually inserted. Without it
+a normal retry would inflate revenue.
+
+**`GameEvent`** — the raw audit trail, **expiring after 30 days**. A busy
+experience emits a join and a leave per player per session; the durable
+consequences live in `PlayerStats` and `Purchase`, so this does not need to be
+permanent. `data` is `Mixed` because every game reports different things — it is
+size-capped at ingest, never trusted, and only ever rendered as text.
+
+### Transcripts and support
+
+**`Transcript`** — structured message data plus a close-time snapshot of the
+player's standing. The snapshot is the interesting part: a transcript read a
+year later shows what staff were looking at when they decided, not what is true
+now. An appeal judged against "0 prior warnings" stays defensible after the
+player collects five more.
+
+### The original collections
 
 **`StaffActivity`** — per-staff counters, `(guildId, userId)` unique plus
 `(guildId, totals.actions: -1)`. One `$inc` per action at the moment it happens;
@@ -312,6 +358,47 @@ limit, and a channel list holding two thousand dead tickets is worse than
 useless — the transcript, the form answers and the full audit trail all live in
 the `Ticket` document and the ticket log, which is where staff actually look
 them up.
+
+### Transcripts and the web viewer
+
+Two outputs from one pass over the channel:
+
+1. **A self-contained HTML file**, attached to the ticket log entry and DM'd to
+   the opener. This is the fallback and always happens.
+2. **A `Transcript` document** rendered by the built-in web viewer at
+   `/t/<token>` — searchable, mobile-friendly, print-to-PDF.
+
+The viewer is `node:http`, not a framework: it serves two routes and needs no
+routing, middleware or body parsing.
+
+**Access model.** There is no login. Access is by unguessable URL — 32 random
+bytes — and **only the SHA-256 hash is stored**, so a database dump does not
+yield working links. The plaintext token exists exactly once, in the link posted
+to the ticket log and the opener's DM. A lost link is therefore *regenerated*,
+never recovered: `/transcript link` rotates the token and invalidates the old URL.
+
+Defences, in order of what they stop:
+
+| Control | Stops |
+|---|---|
+| 256-bit token, hashed at rest | Guessing; database leak yielding live links |
+| Identical 404 for unknown / expired / revoked | Probing which tokens ever existed |
+| 60 req/min per IP | Brute force, before the search space even matters |
+| GET/HEAD only | Any mutation; there is no body to parse |
+| Strict CSP, `textContent` never `innerHTML` | Stored XSS from message content |
+| `noindex` header + meta + `robots.txt` | Search engines indexing private tickets |
+| `Cache-Control: no-store`, `no-referrer` | Intermediaries and target sites seeing the token |
+| 90-day default expiry (Mongo TTL) | Links working forever on personal data |
+
+`WEB_HOST` defaults to `127.0.0.1`. Publishing ticket transcripts onto a public
+interface should be a deliberate act, not what happens because a default went
+unread — put TLS in front, or set `0.0.0.0` knowingly. `doctor` fails the run if
+it finds plain HTTP bound publicly.
+
+Messages are capped at 1,000 per stored transcript. A Mongo document is limited
+to 16MB, and one oversized document would fail to save and lose the transcript
+entirely; the newest are kept, the viewer says so, and the full conversation
+remains in the HTML file.
 
 | Category | Fields collected |
 |---|---|

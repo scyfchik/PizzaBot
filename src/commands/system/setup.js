@@ -177,9 +177,11 @@ export async function execute(interaction) {
       required: false,
     },
     {
-      label: 'Changelog channel',
-      done: Boolean(config.changelog?.channelId),
-      how: '`/config changelog channel:#updates`',
+      label: 'Game data connection',
+      done: Boolean(config.game?.eventChannelId),
+      how:
+        '`/config game event-channel:#game-events` — then connect your Roblox ' +
+        'experience (see `docs/GAME-INTEGRATION.md`) and check with `/game connection`',
       required: false,
     },
   ];

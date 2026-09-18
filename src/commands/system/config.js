@@ -123,6 +123,18 @@ export const data = new SlashCommandBuilder()
       .addBooleanOption((o) =>
         o.setName('transcripts').setDescription('Generate transcripts on close'),
       )
+      .addBooleanOption((o) =>
+        o
+          .setName('web-transcripts')
+          .setDescription('Store a web transcript and include its private link'),
+      )
+      .addIntegerOption((o) =>
+        o
+          .setName('transcript-expiry-days')
+          .setDescription('Days a transcript link stays alive (0 = forever)')
+          .setMinValue(0)
+          .setMaxValue(3650),
+      )
       .addStringOption((o) =>
         o
           .setName('toggle-category')
@@ -251,17 +263,19 @@ export const data = new SlashCommandBuilder()
 
   .addSubcommand((sub) =>
     sub
-      .setName('changelog')
-      .setDescription('Update announcement settings')
+      .setName('game')
+      .setDescription('Live game data settings')
       .addChannelOption((o) =>
         o
-          .setName('channel')
-          .setDescription('Where updates are announced')
-          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
+          .setName('event-channel')
+          .setDescription('Where notable in-game events are mirrored')
+          .addChannelTypes(ChannelType.GuildText),
       )
-      .addRoleOption((o) => o.setName('ping-role').setDescription('Role pinged on a new update'))
+      .addRoleOption((o) =>
+        o.setName('alert-role').setDescription('Pinged on reported errors and failed purchases'),
+      )
       .addStringOption((o) =>
-        o.setName('default-credits').setDescription('Default credit line').setMaxLength(300),
+        o.setName('current-version').setDescription('Current game version').setMaxLength(32),
       ),
   )
 
@@ -325,8 +339,8 @@ export async function execute(interaction, { staff }) {
       return autoModSettings(interaction, config);
     case 'qa':
       return qaSettings(interaction, config);
-    case 'changelog':
-      return changelogSettings(interaction, config);
+    case 'game':
+      return gameSettings(interaction, config);
     case 'roblox':
       return robloxSettings(interaction, config);
     case 'moderation':
@@ -461,6 +475,25 @@ async function ticketSettings(interaction, config) {
   if (opt('transcripts') !== null) {
     config.tickets.transcriptsEnabled = interaction.options.getBoolean('transcripts');
     changes.push(`Transcripts → **${config.tickets.transcriptsEnabled ? 'on' : 'off'}**`);
+  }
+
+  if (opt('web-transcripts') !== null) {
+    config.tickets.webTranscriptsEnabled = interaction.options.getBoolean('web-transcripts');
+    changes.push(`Web transcripts → **${config.tickets.webTranscriptsEnabled ? 'on' : 'off'}**`);
+  }
+
+  if (opt('transcript-expiry-days') !== null) {
+    config.tickets.transcriptExpiryDays = interaction.options.getInteger('transcript-expiry-days');
+    changes.push(
+      `Transcript links expire → **${
+        config.tickets.transcriptExpiryDays === 0
+          ? 'never'
+          : `after ${config.tickets.transcriptExpiryDays} days`
+      }**` +
+        (config.tickets.transcriptExpiryDays === 0
+          ? '\n_Links that never expire accumulate personal data indefinitely._'
+          : ''),
+    );
   }
 
   const toggle = interaction.options.getString('toggle-category');
@@ -637,25 +670,31 @@ async function qaSettings(interaction, config) {
   return applyChanges(interaction, config, changes);
 }
 
-async function changelogSettings(interaction, config) {
+async function gameSettings(interaction, config) {
   const changes = [];
 
-  const channel = interaction.options.getChannel('channel');
+  const channel = interaction.options.getChannel('event-channel');
   if (channel) {
-    config.changelog.channelId = channel.id;
-    changes.push(`Changelog channel → ${channel}`);
+    config.game.eventChannelId = channel.id;
+    changes.push(`Game event channel → ${channel}`);
   }
 
-  const pingRole = interaction.options.getRole('ping-role');
-  if (pingRole) {
-    config.changelog.pingRoleId = pingRole.id;
-    changes.push(`Update ping role → ${pingRole}`);
+  const alertRole = interaction.options.getRole('alert-role');
+  if (alertRole) {
+    config.game.alertRoleId = alertRole.id;
+    changes.push(`Game alert role → ${alertRole}`);
   }
 
-  const credits = interaction.options.getString('default-credits');
-  if (credits) {
-    config.changelog.defaultCredits = credits;
-    changes.push(`Default credits → ${credits}`);
+  const version = interaction.options.getString('current-version');
+  if (version) {
+    config.game.currentVersion = version.trim();
+    changes.push(`Current game version → **${config.game.currentVersion}**`);
+  }
+
+  if (changes.length) {
+    changes.push(
+      '_Game data only arrives if your experience POSTs to the ingest endpoint — `/game connection`._',
+    );
   }
 
   return applyChanges(interaction, config, changes);
@@ -745,6 +784,11 @@ async function view(interaction, config) {
         `${flag(config.tickets.enabled)} enabled · category ${channel(config.tickets.categoryId)}\n` +
           `Support role ${role(config.tickets.supportRoleId)}\n` +
           `Max open **${config.tickets.maxOpenPerUser}** · transcripts ${flag(config.tickets.transcriptsEnabled)}\n` +
+          `Web transcripts ${flag(config.tickets.webTranscriptsEnabled)} · links expire ${
+            config.tickets.transcriptExpiryDays === 0
+              ? '**never**'
+              : `after **${config.tickets.transcriptExpiryDays}d**`
+          }\n` +
           'On close: channel deleted after 5s\n' +
           `Disabled categories: ${
             config.tickets.disabledCategories?.length
@@ -779,9 +823,10 @@ async function view(interaction, config) {
           `Tester role ${role(config.qa.testerRoleId)} · version **${config.qa.currentVersion ?? 'unset'}**`,
       ),
       field(
-        'Changelog & Roblox',
-        `Updates → ${channel(config.changelog.channelId)} · ping ${role(config.changelog.pingRoleId)}\n` +
-          `Verified role ${role(config.roblox.verifiedRoleId)} *(manual verification only)*`,
+        'Game data',
+        `Events → ${channel(config.game.eventChannelId)} · alerts ${role(config.game.alertRoleId)}\n` +
+          `Version **${config.game.currentVersion ?? 'unset'}** · ` +
+          `Verified role ${role(config.roblox.verifiedRoleId)}`,
       ),
       field(
         'Staff ranks',

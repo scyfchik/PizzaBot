@@ -78,6 +78,19 @@ export class PizzaClient extends Client {
   async shutdown() {
     for (const timer of this.timers) clearInterval(timer);
     this.timers.clear();
+
+    // Any system exposing a `stop()` is holding an external resource — right
+    // now that is the transcript HTTP server, whose open sockets would keep the
+    // process alive well past shutdown.
+    for (const [name, system] of this.systems) {
+      if (typeof system.stop !== 'function') continue;
+      try {
+        await system.stop();
+      } catch (err) {
+        log.warn({ err, system: name }, 'System failed to stop cleanly');
+      }
+    }
+
     await this.destroy();
     log.info('Client destroyed');
   }

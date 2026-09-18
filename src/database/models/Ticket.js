@@ -1,5 +1,10 @@
 import mongoose from 'mongoose';
-import { TicketCategory, TicketStatus, TicketPriority } from '../../config/constants.js';
+import {
+  TicketCategory,
+  TicketStatus,
+  TicketPriority,
+  TicketDecision,
+} from '../../config/constants.js';
 
 /**
  * A support ticket.
@@ -75,6 +80,21 @@ const ticketSchema = new mongoose.Schema(
     participants: { type: [String], default: [] },
 
     notes: { type: [noteSchema], default: [] },
+
+    /**
+     * The outcome, not just the fact of closing.
+     *
+     * "Closed" tells you nothing about a ban appeal; "Denied" tells you
+     * everything. Set on close and shown at the top of the transcript.
+     */
+    decision: {
+      type: String,
+      default: TicketDecision.PENDING,
+      enum: Object.values(TicketDecision),
+    },
+
+    /** One-line summary of the issue, for the transcript header. */
+    summary: { type: String, default: null },
 
     closedBy: { type: String, default: null },
     closedByTag: { type: String, default: null },

@@ -1,0 +1,28 @@
+{
+  "name": "pizza-guys-time-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal community infrastructure bot for the Pizza Guy's Time Roblox game studio: security, tickets, moderation and staff operations.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "doctor": "node src/scripts/doctor.js",
+    "doctor:offline": "node src/scripts/doctor.js --offline",
+    "deploy": "node src/scripts/deploy-commands.js",
+    "deploy:clear": "node src/scripts/deploy-commands.js --clear"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "mongodb": "^7.6.0",
+    "mongoose": "^8.8.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "license": "UNLICENSED"
+}

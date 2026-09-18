@@ -1,0 +1,824 @@
+import {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  MessageFlags,
+  ChannelType,
+} from 'discord.js';
+import { getConfig, saveConfig } from '../../config/guildConfig.js';
+import { Permission, LogChannel, ALL_PERMISSIONS, Emojis } from '../../config/constants.js';
+import { TICKET_CATEGORIES } from '../../systems/tickets/categories.js';
+import { hasPermission } from '../../systems/staff/permissions.js';
+import { embeds, field, truncate } from '../../utils/embeds.js';
+import { UserError, PermissionError } from '../../core/errors.js';
+
+/**
+ * Runtime configuration.
+ *
+ * Everything the security and ticket systems read is editable here, live. That
+ * is the whole point of keeping config in MongoDB: during an incident you can
+ * raise an anti-spam threshold or disable a ticket category in ten seconds,
+ * without a redeploy and without editing a file on a server you may not have
+ * access to from your phone.
+ */
+export const data = new SlashCommandBuilder()
+  .setName('config')
+  .setDescription('View or change the bot configuration')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+
+  .addSubcommand((sub) => sub.setName('view').setDescription('Show the current configuration'))
+
+  .addSubcommandGroup((group) =>
+    group
+      .setName('rank')
+      .setDescription('Map staff ranks to Discord roles')
+      .addSubcommand((sub) =>
+        sub
+          .setName('set')
+          .setDescription('Attach a Discord role to a staff rank')
+          .addStringOption((o) =>
+            o.setName('rank').setDescription('Which rank').setRequired(true).setAutocomplete(true),
+          )
+          .addRoleOption((o) => o.setName('role').setDescription('The role').setRequired(true)),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('unset')
+          .setDescription('Detach a role from a rank')
+          .addStringOption((o) =>
+            o.setName('rank').setDescription('Which rank').setRequired(true).setAutocomplete(true),
+          )
+          .addRoleOption((o) => o.setName('role').setDescription('The role').setRequired(true)),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('permission')
+          .setDescription('Grant or revoke a permission node for a rank')
+          .addStringOption((o) =>
+            o.setName('rank').setDescription('Which rank').setRequired(true).setAutocomplete(true),
+          )
+          .addStringOption((o) =>
+            o
+              .setName('node')
+              .setDescription('Permission node')
+              .setRequired(true)
+              .setAutocomplete(true),
+          )
+          .addBooleanOption((o) =>
+            o.setName('grant').setDescription('true to grant, false to revoke').setRequired(true),
+          ),
+      )
+      .addSubcommand((sub) => sub.setName('list').setDescription('Show every rank and its roles')),
+  )
+
+  .addSubcommandGroup((group) =>
+    group
+      .setName('channel')
+      .setDescription('Set the log channels')
+      .addSubcommand((sub) =>
+        sub
+          .setName('set')
+          .setDescription('Point a log feed at a channel')
+          .addStringOption((o) =>
+            o
+              .setName('type')
+              .setDescription('Which feed')
+              .setRequired(true)
+              .addChoices(
+                { name: 'Security', value: LogChannel.SECURITY },
+                { name: 'Moderation', value: LogChannel.MODERATION },
+                { name: 'Tickets', value: LogChannel.TICKETS },
+                { name: 'Staff', value: LogChannel.STAFF },
+                { name: 'Server events', value: LogChannel.SERVER },
+              ),
+          )
+          .addChannelOption((o) =>
+            o
+              .setName('channel')
+              .setDescription('Target channel (omit to disable this feed)')
+              .addChannelTypes(ChannelType.GuildText),
+          ),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('tickets')
+      .setDescription('Ticket system settings')
+      .addChannelOption((o) =>
+        o
+          .setName('category')
+          .setDescription('Category new tickets are created in')
+          .addChannelTypes(ChannelType.GuildCategory),
+      )
+      .addRoleOption((o) =>
+        o.setName('support-role').setDescription('Role pinged when a ticket opens'),
+      )
+      .addIntegerOption((o) =>
+        o
+          .setName('max-open')
+          .setDescription('Max simultaneous tickets per user')
+          .setMinValue(1)
+          .setMaxValue(10),
+      )
+      .addBooleanOption((o) =>
+        o.setName('transcripts').setDescription('Generate transcripts on close'),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('toggle-category')
+          .setDescription('Enable or disable one ticket category')
+          .addChoices(
+            ...TICKET_CATEGORIES.map((c) => ({ name: c.label, value: c.key })),
+          ),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('security')
+      .setDescription('Security system settings')
+      .addRoleOption((o) =>
+        o.setName('quarantine-role').setDescription('Role applied to quarantined accounts'),
+      )
+      .addChannelOption((o) =>
+        o
+          .setName('alert-channel')
+          .setDescription('Where security alerts are posted')
+          .addChannelTypes(ChannelType.GuildText),
+      )
+      .addRoleOption((o) =>
+        o.setName('ping-role').setDescription('Role pinged for high-severity alerts'),
+      )
+      .addBooleanOption((o) => o.setName('anti-raid').setDescription('Enable anti-raid'))
+      .addBooleanOption((o) => o.setName('anti-spam').setDescription('Enable anti-spam'))
+      .addBooleanOption((o) => o.setName('anti-nuke').setDescription('Enable anti-nuke'))
+      .addStringOption((o) =>
+        o
+          .setName('raid-action')
+          .setDescription('What anti-raid does to a detected wave')
+          .addChoices(
+            { name: 'Quarantine (reversible, recommended)', value: 'quarantine' },
+            { name: 'Kick', value: 'kick' },
+            { name: 'Alert only', value: 'alert_only' },
+          ),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('nuke-response')
+          .setDescription('What anti-nuke does to an ordinary member')
+          .addChoices(
+            { name: 'Remove dangerous permissions (recommended)', value: 'remove_permissions' },
+            { name: 'Alert only — never act automatically', value: 'alert_only' },
+          ),
+      )
+      .addIntegerOption((o) =>
+        o
+          .setName('raid-join-threshold')
+          .setDescription('Joins within the window that trip anti-raid')
+          .setMinValue(3)
+          .setMaxValue(100),
+      )
+      .addIntegerOption((o) =>
+        o
+          .setName('spam-message-threshold')
+          .setDescription('Messages within the window that count as spam')
+          .setMinValue(3)
+          .setMaxValue(30),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('automod')
+      .setDescription('Content filtering — scam patterns and the word blacklist')
+      .addBooleanOption((o) =>
+        o.setName('scam-detection').setDescription('Detect free-robux / nitro / phishing patterns'),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('scam-action')
+          .setDescription('What to do with a detected scam')
+          .addChoices(
+            { name: 'Delete + 1h timeout (recommended)', value: 'delete_timeout' },
+            { name: 'Delete + warn', value: 'delete_warn' },
+            { name: 'Delete only', value: 'delete' },
+          ),
+      )
+      .addBooleanOption((o) => o.setName('blacklist').setDescription('Enable the word blacklist'))
+      .addStringOption((o) =>
+        o
+          .setName('blacklist-add')
+          .setDescription('Add terms, comma separated')
+          .setMaxLength(500),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('blacklist-remove')
+          .setDescription('Remove terms, comma separated')
+          .setMaxLength(500),
+      )
+      .addStringOption((o) =>
+        o
+          .setName('blacklist-action')
+          .setDescription('What to do with a blacklisted word')
+          .addChoices(
+            { name: 'Delete + warn (recommended)', value: 'delete_warn' },
+            { name: 'Delete only', value: 'delete' },
+            { name: 'Delete + 1h timeout', value: 'delete_timeout' },
+          ),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('qa')
+      .setDescription('Bug reporting and QA settings')
+      .addBooleanOption((o) => o.setName('enabled').setDescription('Enable bug reporting'))
+      .addChannelOption((o) =>
+        o
+          .setName('board-channel')
+          .setDescription('Where bug reports are posted and kept in sync')
+          .addChannelTypes(ChannelType.GuildText),
+      )
+      .addRoleOption((o) => o.setName('tester-role').setDescription('QA tester role'))
+      .addStringOption((o) =>
+        o.setName('current-version').setDescription('Current game version, e.g. 0.5.0').setMaxLength(32),
+      )
+      .addBooleanOption((o) =>
+        o.setName('ping-critical-only').setDescription('Only ping testers for critical bugs'),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('changelog')
+      .setDescription('Update announcement settings')
+      .addChannelOption((o) =>
+        o
+          .setName('channel')
+          .setDescription('Where updates are announced')
+          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
+      )
+      .addRoleOption((o) => o.setName('ping-role').setDescription('Role pinged on a new update'))
+      .addStringOption((o) =>
+        o.setName('default-credits').setDescription('Default credit line').setMaxLength(300),
+      ),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('roblox')
+      .setDescription('Roblox verification settings')
+      .addRoleOption((o) => o.setName('verified-role').setDescription('Role granted on verification'))
+      .addRoleOption((o) => o.setName('tester-role').setDescription('Roblox in-game tester role')),
+  )
+
+  .addSubcommand((sub) =>
+    sub
+      .setName('moderation')
+      .setDescription('Moderation settings')
+      .addBooleanOption((o) => o.setName('dm-on-punishment').setDescription('DM users when punished'))
+      .addBooleanOption((o) => o.setName('escalation').setDescription('Auto-escalate repeat warnings'))
+      .addIntegerOption((o) =>
+        o
+          .setName('warns-before-timeout')
+          .setDescription('Active warns that trigger an automatic timeout')
+          .setMinValue(2)
+          .setMaxValue(20),
+      )
+      .addIntegerOption((o) =>
+        o
+          .setName('warns-before-kick')
+          .setDescription('Active warns that trigger an automatic kick (0 to disable)')
+          .setMinValue(0)
+          .setMaxValue(20),
+      ),
+  );
+
+export const meta = { permission: Permission.CONFIG_VIEW, cooldown: 3 };
+
+export async function execute(interaction, { staff }) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const group = interaction.options.getSubcommandGroup(false);
+  const sub = interaction.options.getSubcommand();
+  const config = await getConfig(interaction.guildId);
+
+  // Viewing is separate from editing: a Developer can see how things are set
+  // up without being able to change security thresholds.
+  const isRead = sub === 'view' || sub === 'list';
+  if (!isRead && !hasPermission(staff, Permission.CONFIG_EDIT)) {
+    throw new PermissionError('You can view the configuration, but not change it.');
+  }
+
+  if (group === 'rank') return rankGroup(interaction, config, sub);
+  if (group === 'channel') return setChannel(interaction, config);
+
+  switch (sub) {
+    case 'view':
+      return view(interaction, config);
+    case 'tickets':
+      return ticketSettings(interaction, config);
+    case 'security':
+      return securitySettings(interaction, config);
+    case 'automod':
+      return autoModSettings(interaction, config);
+    case 'qa':
+      return qaSettings(interaction, config);
+    case 'changelog':
+      return changelogSettings(interaction, config);
+    case 'roblox':
+      return robloxSettings(interaction, config);
+    case 'moderation':
+      return moderationSettings(interaction, config);
+  }
+}
+
+// ------------------------------------------------------------------ ranks
+
+async function rankGroup(interaction, config, sub) {
+  if (sub === 'list') {
+    return interaction.editReply({
+      embeds: [
+        embeds.brand('Staff ranks').addFields(
+          config.staffRanks
+            .sort((a, b) => b.position - a.position)
+            .map((rank) =>
+              field(
+                `${rank.protected ? '🔒 ' : ''}${rank.name} · position ${rank.position}`,
+                `${rank.roleIds?.length ? rank.roleIds.map((id) => `<@&${id}>`).join(', ') : '*no role mapped*'}\n` +
+                  `${rank.permissions?.includes('*') ? '**All permissions**' : `${rank.permissions?.length ?? 0} permission node(s)`}`,
+              ),
+            ),
+        ),
+      ],
+    });
+  }
+
+  const rankKey = interaction.options.getString('rank');
+  const rank = config.staffRanks.find((r) => r.key === rankKey);
+  if (!rank) throw new UserError(`No rank \`${rankKey}\`. Pick one from the suggestions.`);
+
+  if (sub === 'permission') {
+    const node = interaction.options.getString('node');
+    const grant = interaction.options.getBoolean('grant');
+
+    if (node !== '*' && !ALL_PERMISSIONS.includes(node)) {
+      throw new UserError(`\`${node}\` is not a known permission node.`);
+    }
+
+    if (grant) {
+      if (!rank.permissions.includes(node)) rank.permissions.push(node);
+    } else {
+      rank.permissions = rank.permissions.filter((p) => p !== node);
+    }
+    await saveConfig(config);
+
+    return interaction.editReply({
+      embeds: [
+        embeds.success(
+          `${grant ? 'Granted' : 'Revoked'} \`${node}\` ${grant ? 'to' : 'from'} **${rank.name}**.`,
+        ),
+      ],
+    });
+  }
+
+  const role = interaction.options.getRole('role');
+
+  if (sub === 'set') {
+    if (role.managed) {
+      throw new UserError('That is a bot-managed role — pick a normal role instead.');
+    }
+    if (!rank.roleIds.includes(role.id)) rank.roleIds.push(role.id);
+    await saveConfig(config);
+
+    return interaction.editReply({
+      embeds: [
+        embeds
+          .success(`${role} now grants the **${rank.name}** rank.`)
+          .addFields(
+            field(
+              'Permissions granted',
+              rank.permissions.includes('*')
+                ? '**Everything** — this rank holds the wildcard.'
+                : truncate(rank.permissions.map((p) => `\`${p}\``).join(' ')),
+            ),
+          ),
+      ],
+    });
+  }
+
+  rank.roleIds = rank.roleIds.filter((id) => id !== role.id);
+  await saveConfig(config);
+  return interaction.editReply({
+    embeds: [embeds.success(`${role} no longer grants **${rank.name}**.`)],
+  });
+}
+
+// ------------------------------------------------------------------ channels
+
+async function setChannel(interaction, config) {
+  const type = interaction.options.getString('type');
+  const channel = interaction.options.getChannel('channel');
+
+  config.logChannels[type] = channel?.id ?? null;
+  await saveConfig(config);
+
+  return interaction.editReply({
+    embeds: [
+      embeds.success(
+        channel
+          ? `**${type}** logs will go to ${channel}.`
+          : `**${type}** logging disabled.`,
+      ),
+    ],
+  });
+}
+
+// ------------------------------------------------------------------ sections
+
+async function ticketSettings(interaction, config) {
+  const changes = [];
+  const opt = (name) => interaction.options.get(name)?.value ?? null;
+
+  const category = interaction.options.getChannel('category');
+  if (category) {
+    config.tickets.categoryId = category.id;
+    changes.push(`Ticket category → ${category}`);
+  }
+
+  const supportRole = interaction.options.getRole('support-role');
+  if (supportRole) {
+    config.tickets.supportRoleId = supportRole.id;
+    changes.push(`Support role → ${supportRole}`);
+  }
+
+  if (opt('max-open') !== null) {
+    config.tickets.maxOpenPerUser = interaction.options.getInteger('max-open');
+    changes.push(`Max open per user → **${config.tickets.maxOpenPerUser}**`);
+  }
+
+  if (opt('transcripts') !== null) {
+    config.tickets.transcriptsEnabled = interaction.options.getBoolean('transcripts');
+    changes.push(`Transcripts → **${config.tickets.transcriptsEnabled ? 'on' : 'off'}**`);
+  }
+
+  const toggle = interaction.options.getString('toggle-category');
+  if (toggle) {
+    const disabled = config.tickets.disabledCategories ?? [];
+    if (disabled.includes(toggle)) {
+      config.tickets.disabledCategories = disabled.filter((c) => c !== toggle);
+      changes.push(`Category \`${toggle}\` → **enabled**`);
+    } else {
+      config.tickets.disabledCategories = [...disabled, toggle];
+      changes.push(`Category \`${toggle}\` → **disabled**`);
+    }
+    changes.push('_Run `/panel refresh` to update the panel._');
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function securitySettings(interaction, config) {
+  const changes = [];
+  const sec = config.security;
+  const opt = (name) => interaction.options.get(name)?.value ?? null;
+
+  const quarantine = interaction.options.getRole('quarantine-role');
+  if (quarantine) {
+    sec.quarantineRoleId = quarantine.id;
+    changes.push(`Quarantine role → ${quarantine}`);
+  }
+
+  const alertChannel = interaction.options.getChannel('alert-channel');
+  if (alertChannel) {
+    sec.alertChannelId = alertChannel.id;
+    changes.push(`Alert channel → ${alertChannel}`);
+  }
+
+  const pingRole = interaction.options.getRole('ping-role');
+  if (pingRole) {
+    sec.pingRoleId = pingRole.id;
+    changes.push(`Alert ping role → ${pingRole}`);
+  }
+
+  for (const [option, path, label] of [
+    ['anti-raid', 'antiRaid', 'Anti-raid'],
+    ['anti-spam', 'antiSpam', 'Anti-spam'],
+    ['anti-nuke', 'antiNuke', 'Anti-nuke'],
+  ]) {
+    if (opt(option) !== null) {
+      sec[path].enabled = interaction.options.getBoolean(option);
+      changes.push(`${label} → **${sec[path].enabled ? 'enabled' : 'disabled'}**`);
+    }
+  }
+
+  const raidAction = interaction.options.getString('raid-action');
+  if (raidAction) {
+    sec.antiRaid.action = raidAction;
+    changes.push(`Anti-raid response → \`${raidAction}\``);
+  }
+
+  const nukeResponse = interaction.options.getString('nuke-response');
+  if (nukeResponse) {
+    sec.antiNuke.response = nukeResponse;
+    changes.push(
+      `Anti-nuke response → \`${nukeResponse}\`` +
+        '\n_Protected ranks are never actioned automatically regardless of this setting._',
+    );
+  }
+
+  if (opt('raid-join-threshold') !== null) {
+    sec.antiRaid.joinThreshold = interaction.options.getInteger('raid-join-threshold');
+    changes.push(`Raid join threshold → **${sec.antiRaid.joinThreshold}**`);
+  }
+
+  if (opt('spam-message-threshold') !== null) {
+    sec.antiSpam.messageThreshold = interaction.options.getInteger('spam-message-threshold');
+    changes.push(`Spam message threshold → **${sec.antiSpam.messageThreshold}**`);
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function autoModSettings(interaction, config) {
+  const changes = [];
+  const automod = config.security.autoMod;
+  const opt = (name) => interaction.options.get(name)?.value ?? null;
+
+  if (opt('scam-detection') !== null) {
+    automod.scamDetection = interaction.options.getBoolean('scam-detection');
+    changes.push(`Scam detection → **${automod.scamDetection ? 'on' : 'off'}**`);
+  }
+
+  const scamAction = interaction.options.getString('scam-action');
+  if (scamAction) {
+    automod.scamAction = scamAction;
+    changes.push(`Scam action → \`${scamAction}\``);
+  }
+
+  if (opt('blacklist') !== null) {
+    automod.blacklistEnabled = interaction.options.getBoolean('blacklist');
+    changes.push(`Word blacklist → **${automod.blacklistEnabled ? 'on' : 'off'}**`);
+  }
+
+  const blacklistAction = interaction.options.getString('blacklist-action');
+  if (blacklistAction) {
+    automod.blacklistAction = blacklistAction;
+    changes.push(`Blacklist action → \`${blacklistAction}\``);
+  }
+
+  const toAdd = splitTerms(interaction.options.getString('blacklist-add'));
+  if (toAdd.length) {
+    const before = automod.blacklist.length;
+    automod.blacklist = [...new Set([...automod.blacklist, ...toAdd])];
+    changes.push(`Blacklist → added **${automod.blacklist.length - before}** term(s)`);
+  }
+
+  const toRemove = splitTerms(interaction.options.getString('blacklist-remove'));
+  if (toRemove.length) {
+    const removeSet = new Set(toRemove);
+    const before = automod.blacklist.length;
+    automod.blacklist = automod.blacklist.filter((t) => !removeSet.has(t.toLowerCase()));
+    changes.push(`Blacklist → removed **${before - automod.blacklist.length}** term(s)`);
+  }
+
+  if (changes.length) {
+    // Never echo the terms themselves back into a channel.
+    changes.push(`_Blacklist now holds ${automod.blacklist.length} term(s)._`);
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+function splitTerms(value) {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 100);
+}
+
+async function qaSettings(interaction, config) {
+  const changes = [];
+  const opt = (name) => interaction.options.get(name)?.value ?? null;
+
+  if (opt('enabled') !== null) {
+    config.qa.enabled = interaction.options.getBoolean('enabled');
+    changes.push(`Bug reporting → **${config.qa.enabled ? 'enabled' : 'disabled'}**`);
+  }
+
+  const board = interaction.options.getChannel('board-channel');
+  if (board) {
+    config.qa.boardChannelId = board.id;
+    changes.push(`Bug board → ${board}`);
+  }
+
+  const testerRole = interaction.options.getRole('tester-role');
+  if (testerRole) {
+    config.qa.testerRoleId = testerRole.id;
+    changes.push(`Tester role → ${testerRole}`);
+  }
+
+  const version = interaction.options.getString('current-version');
+  if (version) {
+    config.qa.currentVersion = version.trim();
+    changes.push(`Current version → **${config.qa.currentVersion}**`);
+  }
+
+  if (opt('ping-critical-only') !== null) {
+    config.qa.pingOnCriticalOnly = interaction.options.getBoolean('ping-critical-only');
+    changes.push(
+      `Tester pings → **${config.qa.pingOnCriticalOnly ? 'critical bugs only' : 'every bug'}**`,
+    );
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function changelogSettings(interaction, config) {
+  const changes = [];
+
+  const channel = interaction.options.getChannel('channel');
+  if (channel) {
+    config.changelog.channelId = channel.id;
+    changes.push(`Changelog channel → ${channel}`);
+  }
+
+  const pingRole = interaction.options.getRole('ping-role');
+  if (pingRole) {
+    config.changelog.pingRoleId = pingRole.id;
+    changes.push(`Update ping role → ${pingRole}`);
+  }
+
+  const credits = interaction.options.getString('default-credits');
+  if (credits) {
+    config.changelog.defaultCredits = credits;
+    changes.push(`Default credits → ${credits}`);
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function robloxSettings(interaction, config) {
+  const changes = [];
+
+  const verifiedRole = interaction.options.getRole('verified-role');
+  if (verifiedRole) {
+    config.roblox.verifiedRoleId = verifiedRole.id;
+    changes.push(`Verified role → ${verifiedRole}`);
+  }
+
+  const testerRole = interaction.options.getRole('tester-role');
+  if (testerRole) {
+    config.roblox.testerRoleId = testerRole.id;
+    changes.push(`Roblox tester role → ${testerRole}`);
+  }
+
+  if (changes.length) {
+    changes.push(
+      '_The Roblox API is not implemented — `/verify approve` is a manual staff vouch._',
+    );
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function moderationSettings(interaction, config) {
+  const changes = [];
+  const mod = config.moderation;
+  const opt = (name) => interaction.options.get(name)?.value ?? null;
+
+  if (opt('dm-on-punishment') !== null) {
+    mod.dmOnPunishment = interaction.options.getBoolean('dm-on-punishment');
+    changes.push(`DM on punishment → **${mod.dmOnPunishment ? 'on' : 'off'}**`);
+  }
+  if (opt('escalation') !== null) {
+    mod.escalation.enabled = interaction.options.getBoolean('escalation');
+    changes.push(`Auto-escalation → **${mod.escalation.enabled ? 'on' : 'off'}**`);
+  }
+  if (opt('warns-before-timeout') !== null) {
+    mod.escalation.warnsBeforeTimeout = interaction.options.getInteger('warns-before-timeout');
+    changes.push(`Warns before timeout → **${mod.escalation.warnsBeforeTimeout}**`);
+  }
+  if (opt('warns-before-kick') !== null) {
+    mod.escalation.warnsBeforeKick = interaction.options.getInteger('warns-before-kick');
+    changes.push(
+      `Warns before kick → **${mod.escalation.warnsBeforeKick || 'disabled'}**`,
+    );
+  }
+
+  return applyChanges(interaction, config, changes);
+}
+
+async function applyChanges(interaction, config, changes) {
+  if (!changes.length) {
+    throw new UserError('Nothing to change — provide at least one option.');
+  }
+  await saveConfig(config);
+  return interaction.editReply({
+    embeds: [embeds.success('Configuration updated.').addFields(field('Changes', changes.join('\n')))],
+  });
+}
+
+// ------------------------------------------------------------------ view
+
+async function view(interaction, config) {
+  const channel = (id) => (id ? `<#${id}>` : '*not set*');
+  const role = (id) => (id ? `<@&${id}>` : '*not set*');
+  const flag = (on) => (on ? Emojis.CHECK : Emojis.CROSS);
+
+  const embed = embeds
+    .brand('Configuration')
+    .addFields(
+      field(
+        'Log channels',
+        `Security ${channel(config.logChannels.security)}\n` +
+          `Moderation ${channel(config.logChannels.moderation)}\n` +
+          `Tickets ${channel(config.logChannels.tickets)}\n` +
+          `Staff ${channel(config.logChannels.staff)}\n` +
+          `Server ${channel(config.logChannels.server)}`,
+      ),
+      field(
+        'Tickets',
+        `${flag(config.tickets.enabled)} enabled · category ${channel(config.tickets.categoryId)}\n` +
+          `Support role ${role(config.tickets.supportRoleId)}\n` +
+          `Max open **${config.tickets.maxOpenPerUser}** · transcripts ${flag(config.tickets.transcriptsEnabled)}\n` +
+          'On close: channel deleted after 5s\n' +
+          `Disabled categories: ${
+            config.tickets.disabledCategories?.length
+              ? config.tickets.disabledCategories.join(', ')
+              : 'none'
+          }`,
+      ),
+      field(
+        'Security',
+        `Anti-raid ${flag(config.security.antiRaid.enabled)} (${config.security.antiRaid.joinThreshold} joins / ${config.security.antiRaid.windowSeconds}s → \`${config.security.antiRaid.action}\`)\n` +
+          `Anti-spam ${flag(config.security.antiSpam.enabled)} (${config.security.antiSpam.messageThreshold} msgs / ${config.security.antiSpam.windowSeconds}s)\n` +
+          `Anti-nuke ${flag(config.security.antiNuke.enabled)} (→ \`${config.security.antiNuke.response}\`)\n` +
+          `Quarantine ${role(config.security.quarantineRoleId)} · alerts ${channel(config.security.alertChannelId)}\n` +
+          `Lockdown: ${config.security.lockdown.active ? '🔒 **ACTIVE**' : 'inactive'}`,
+      ),
+      field(
+        'Moderation',
+        `DM on punishment ${flag(config.moderation.dmOnPunishment)}\n` +
+          `Escalation ${flag(config.moderation.escalation.enabled)} — ` +
+          `timeout at **${config.moderation.escalation.warnsBeforeTimeout}** warns, ` +
+          `kick at **${config.moderation.escalation.warnsBeforeKick || '—'}**`,
+      ),
+      field(
+        'AutoMod',
+        `Scam detection ${flag(config.security.autoMod.scamDetection)} (→ \`${config.security.autoMod.scamAction}\`)\n` +
+          `Word blacklist ${flag(config.security.autoMod.blacklistEnabled)} — ` +
+          `${config.security.autoMod.blacklist.length} term(s), \`${config.security.autoMod.blacklistAction}\``,
+      ),
+      field(
+        'QA',
+        `${flag(config.qa.enabled)} enabled · board ${channel(config.qa.boardChannelId)}\n` +
+          `Tester role ${role(config.qa.testerRoleId)} · version **${config.qa.currentVersion ?? 'unset'}**`,
+      ),
+      field(
+        'Changelog & Roblox',
+        `Updates → ${channel(config.changelog.channelId)} · ping ${role(config.changelog.pingRoleId)}\n` +
+          `Verified role ${role(config.roblox.verifiedRoleId)} *(manual verification only)*`,
+      ),
+      field(
+        'Staff ranks',
+        config.staffRanks
+          .sort((a, b) => b.position - a.position)
+          .map((r) => `${r.roleIds?.length ? Emojis.CHECK : '▫️'} ${r.name}`)
+          .join(' · '),
+      ),
+    )
+    .setFooter({ text: 'Use /config rank list for the full rank breakdown' });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ------------------------------------------------------------------ autocomplete
+
+export async function autocomplete(interaction) {
+  const focused = interaction.options.getFocused(true);
+  const query = focused.value.toLowerCase();
+
+  if (focused.name === 'rank') {
+    const config = await getConfig(interaction.guildId);
+    const matches = config.staffRanks
+      .filter((r) => r.name.toLowerCase().includes(query) || r.key.includes(query))
+      .sort((a, b) => b.position - a.position)
+      .slice(0, 25)
+      .map((r) => ({ name: `${r.name} (position ${r.position})`, value: r.key }));
+    return interaction.respond(matches);
+  }
+
+  if (focused.name === 'node') {
+    const matches = ['*', ...ALL_PERMISSIONS]
+      .filter((node) => node.includes(query))
+      .slice(0, 25)
+      .map((node) => ({ name: node === '*' ? '* (all permissions)' : node, value: node }));
+    return interaction.respond(matches);
+  }
+
+  return interaction.respond([]);
+}

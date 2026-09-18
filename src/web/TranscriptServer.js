@@ -47,7 +47,14 @@ export class TranscriptServer {
 
   async start() {
     if (!this.enabled) {
-      log.info('Transcript web viewer disabled (WEB_ENABLED is not true)');
+      // A warning, not info: this silently downgrades a headline feature, and
+      // the only symptom is "the web viewer was unavailable" on every closed
+      // ticket — which does not point at the cause.
+      log.warn(
+        'Transcript web viewer is OFF because WEB_ENABLED is not "true" in .env. ' +
+          'Every closed ticket will fall back to an attached HTML file. ' +
+          'Set WEB_ENABLED=true and WEB_BASE_URL=<public origin> to enable it.',
+      );
       return null;
     }
 

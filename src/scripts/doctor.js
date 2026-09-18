@@ -73,7 +73,12 @@ if (env.nodeEnv === 'production' && env.logLevel === 'debug') {
 }
 
 if (!env.web.enabled) {
-  warn('Transcript viewer', 'disabled — closed tickets fall back to an attached HTML file');
+  // Name the variable and the consequence. "Disabled" alone sends people
+  // looking for a bug in the viewer, which is the wrong place entirely.
+  warn(
+    'Transcript viewer',
+    'OFF — WEB_ENABLED is not "true" in .env, so every closed ticket attaches an HTML file instead of posting buttons',
+  );
 } else {
   ok('Transcript viewer', `${env.web.host}:${env.web.port} → ${env.web.baseUrl}`);
 

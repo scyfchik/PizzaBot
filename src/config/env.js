@@ -131,8 +131,15 @@ export const env = Object.freeze({
      * front and terminate TLS there, or set this to 0.0.0.0 knowingly.
      */
     host: optional('WEB_HOST', '127.0.0.1'),
-    /** Public origin used to build links, e.g. https://tickets.example.com */
-    baseUrl: optional('WEB_BASE_URL')?.replace(/\/+$/, '') ?? null,
+    /**
+     * Public origin used to build links, e.g. https://tickets.example.com
+     *
+     * `WEB_PUBLIC_URL` is accepted as an alias. The two names are easy to
+     * confuse, and picking the wrong one fails silently — the bot boots, the
+     * server listens, and every ticket quietly falls back to an attachment.
+     */
+    baseUrl:
+      (optional('WEB_BASE_URL') ?? optional('WEB_PUBLIC_URL'))?.replace(/\/+$/, '') ?? null,
     /** Read X-Forwarded-For for rate limiting. Only enable behind a proxy. */
     trustProxy: bool('WEB_TRUST_PROXY', false),
   }),
@@ -164,7 +171,7 @@ export const env = Object.freeze({
 // A transcript server with no public origin can serve pages but cannot build a
 // working link, which would silently post dead URLs into the ticket log.
 if (env.web.enabled && !env.web.baseUrl) {
-  errors.push('WEB_BASE_URL is required when WEB_ENABLED is true');
+  errors.push('WEB_BASE_URL (or WEB_PUBLIC_URL) is required when WEB_ENABLED is true');
 }
 if (env.web.enabled && env.web.baseUrl && !/^https?:\/\//i.test(env.web.baseUrl)) {
   errors.push(`WEB_BASE_URL must start with http:// or https://, got: ${env.web.baseUrl}`);

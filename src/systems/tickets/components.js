@@ -99,7 +99,9 @@ export function ticketHeaderEmbed(ticket, opener) {
       field('🕒 Created', fullTimestamp(ticket.createdAt ?? new Date()), true),
     );
 
-  const avatar = opener?.displayAvatarURL?.();
+  // The Roblox avatar identifies the player better than a Discord one in a
+  // Roblox support ticket; fall back to Discord when there is none.
+  const avatar = ticket.roblox?.headshotUrl ?? opener?.displayAvatarURL?.();
   if (avatar) embed.setThumbnail(avatar);
 
   // Separator before the free-text answers, so the metadata block reads as one
@@ -133,16 +135,46 @@ export function statusLine(ticket) {
   return '🔴 Waiting for staff';
 }
 
+/** Accounts younger than this are flagged — the classic alt-account signal. */
+const NEW_ACCOUNT_DAYS = 30;
+
 /**
- * The Roblox account, when we have one.
+ * The Roblox account, as the Roblox API described it when the ticket opened.
  *
- * Only the username is shown: it is free text typed by the player, and without
- * the Roblox API there is no ID to resolve it to. Printing an unverified ID
- * would imply a check that has not happened.
+ * Two different claims are kept apart on purpose. The account's *existence*,
+ * id and age are facts from Roblox. That the person who opened the ticket
+ * *owns* it is still only what they typed — Pizza Bot does not verify — so the
+ * line says "self-reported" rather than implying a check that never happened.
  */
-function robloxLine(ticket) {
-  if (!ticket.robloxUsername) return '*not provided*';
-  return `\`${ticket.robloxUsername}\`\n*unverified*`;
+export function robloxLine(ticket) {
+  const r = ticket.roblox ?? {};
+  const typed = ticket.robloxUsername;
+
+  if (!typed) return '*not provided*';
+
+  if (r.status === 'not_found') {
+    return `\`${typed}\`\n⚠️ **No such Roblox account**`;
+  }
+
+  if (r.status !== 'found') {
+    // `unavailable`, or a ticket opened before the Roblox API existed.
+    return `\`${typed}\`\n*Roblox lookup unavailable*`;
+  }
+
+  const lines = [`\`${r.name}\` (ID: ${r.id})`];
+  if (r.displayName && r.displayName !== r.name) lines.push(`Display: **${r.displayName}**`);
+  if (r.accountAgeDays != null) {
+    lines.push(
+      r.accountAgeDays < NEW_ACCOUNT_DAYS
+        ? `⚠️ **New account — ${r.accountAgeDays} days old**`
+        : `${r.accountAgeDays.toLocaleString()} days old`,
+    );
+  }
+  if (r.isBanned) lines.push('🚫 **Banned by Roblox**');
+  if (r.previousNames?.length) lines.push(`Previously: ${r.previousNames.slice(0, 3).join(', ')}`);
+  lines.push('*self-reported*');
+
+  return lines.join('\n');
 }
 
 /**

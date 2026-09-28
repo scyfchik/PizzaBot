@@ -53,42 +53,98 @@ export async function execute(interaction, { client, staff }) {
 
   if (sub === 'connection') return connection(interaction, client, gameData);
   if (sub === 'events') return events(interaction, gameData, staff);
-  return stats(interaction, gameData);
+  return stats(interaction, gameData, client);
 }
 
-async function stats(interaction, gameData) {
-  const s = await gameData.serverStats(interaction.guildId);
+/**
+ * Two sources, shown side by side when both exist:
+ *
+ *   - **Roblox** (public API, needs only ROBLOX_UNIVERSE_ID): players online,
+ *     visits, favourites, likes. Works from day one with no game changes.
+ *   - **Your game** (ingest): per-player playtime, spend, failed purchases.
+ *     Only once the in-game reporter is installed.
+ *
+ * Roblox's player count is authoritative; the ingest count is an upper bound,
+ * because a crashed server never reports its leaves.
+ */
+async function stats(interaction, gameData, client) {
+  const robloxGame = client.getSystem('roblox').game;
 
-  if (s.empty) throw new UserError(notConnected());
-
-  const hours = Math.round(s.totalPlaytimeMinutes / 60);
-
-  await interaction.editReply({
-    embeds: [
-      embeds
-        .brand(`${Emojis.PIZZA} Game Statistics`)
-        .addFields(
-          field('🟢 Players online', String(s.online), true),
-          field('🖥️ Active servers', String(s.servers), true),
-          field('📅 Active today', String(s.activeToday), true),
-          field('👥 Known players', s.totalPlayers.toLocaleString(), true),
-          field('⏱️ Total playtime', `${hours.toLocaleString()}h`, true),
-          field('💳 Lifetime spend', `R$ ${s.totalRobux.toLocaleString()}`, true),
-          field(
-            '💸 Today',
-            `${s.purchasesToday} purchase(s)` +
-              (s.failuresToday ? ` · **${s.failuresToday} failed**` : ' · 0 failed'),
-            true,
-          ),
+  const [ingest, live] = await Promise.all([
+    gameData.serverStats(interaction.guildId),
+    robloxGame.configured
+      ? robloxGame.getStats().then(
+          (value) => ({ value, error: null }),
+          (error) => ({ value: null, error }),
         )
-        .setFooter({
-          text:
-            s.failuresToday > 0
-              ? 'Failed purchases today — expect purchase-support tickets.'
-              : 'Online count is an upper bound: a crashed server never reports its leaves.',
-        }),
-    ],
+      : Promise.resolve({ value: null, error: null }),
+  ]);
+
+  if (ingest.empty && !live.value) {
+    throw new UserError(
+      live.error
+        ? 'Roblox API is unavailable right now, and your game has not reported any data yet.'
+        : notConnected(robloxGame.configured),
+    );
+  }
+
+  const embed = embeds.brand(`${Emojis.PIZZA} ${live.value?.name ?? 'Game Statistics'}`);
+
+  if (live.value) {
+    const g = live.value;
+    embed.setURL(g.url).addFields(
+      field('🟢 Playing now', g.playing.toLocaleString(), true),
+      field('👣 Visits', g.visits.toLocaleString(), true),
+      field('⭐ Favourites', g.favorites.toLocaleString(), true),
+      field(
+        '👍 Rating',
+        g.likeRatio != null
+          ? `${Math.round(g.likeRatio * 100)}% (${g.upVotes.toLocaleString()} 👍 · ${g.downVotes.toLocaleString()} 👎)`
+          : '—',
+        true,
+      ),
+      field('🧑‍🤝‍🧑 Server size', `${g.maxPlayers} max`, true),
+      field('🛠️ Last updated', g.updated ? timestamp(g.updated, 'R') : '—', true),
+    );
+  } else if (live.error) {
+    embed.addFields(field('🟢 Roblox', '⚠️ Roblox API unavailable — live numbers missing.'));
+  }
+
+  if (!ingest.empty) {
+    const hours = Math.round(ingest.totalPlaytimeMinutes / 60);
+    embed.addFields(
+      field('​', '**From your game**'),
+      field('🖥️ Active servers', String(ingest.servers), true),
+      field('📅 Active today', String(ingest.activeToday), true),
+      field('👥 Known players', ingest.totalPlayers.toLocaleString(), true),
+      field('⏱️ Total playtime', `${hours.toLocaleString()}h`, true),
+      field('💳 Lifetime spend', `R$ ${ingest.totalRobux.toLocaleString()}`, true),
+      field(
+        '💸 Today',
+        `${ingest.purchasesToday} purchase(s)` +
+          (ingest.failuresToday ? ` · **${ingest.failuresToday} failed**` : ' · 0 failed'),
+        true,
+      ),
+    );
+  } else {
+    embed.addFields(
+      field(
+        '​',
+        '*Per-player data (playtime, spend) appears once the in-game reporter is installed — see `/game connection`.*',
+      ),
+    );
+  }
+
+  embed.setFooter({
+    text:
+      ingest.failuresToday > 0
+        ? 'Failed purchases today — expect purchase-support tickets.'
+        : live.value
+          ? 'Live numbers from Roblox, cached for one minute.'
+          : 'Online count is an upper bound: a crashed server never reports its leaves.',
   });
+
+  await interaction.editReply({ embeds: [embed] });
 }
 
 async function events(interaction, gameData, staff) {
@@ -124,25 +180,37 @@ async function events(interaction, gameData, staff) {
 }
 
 async function connection(interaction, client, gameData) {
-  const [hasData, recent] = await Promise.all([
+  const robloxGame = client.getSystem('roblox').game;
+
+  const [hasData, recent, universe] = await Promise.all([
     gameData.hasData(interaction.guildId),
     gameData.recentEvents(interaction.guildId, { limit: 1 }),
+    robloxGame.configured
+      ? robloxGame.getStats().then(
+          (value) => (value ? `${Emojis.CHECK} ${value.name}` : `${Emojis.CROSS} universe not found — check ROBLOX_UNIVERSE_ID`),
+          () => `${Emojis.ALERT} Roblox API unreachable`,
+        )
+      : Promise.resolve(`${Emojis.CROSS} ROBLOX_UNIVERSE_ID not set`),
   ]);
 
   const web = client.getSystem('web');
   const last = recent[0];
   const fresh = last && Date.now() - new Date(last.occurredAt).getTime() < 15 * 60_000;
 
+  // `listening`, not `enabled`: configured-but-not-bound must not read as up.
+  const webState = web?.listening
+    ? `${Emojis.CHECK} running`
+    : web?.enabled
+      ? `${Emojis.ALERT} enabled but not listening — check the log for a port error`
+      : `${Emojis.CROSS} disabled (WEB_ENABLED)`;
+
   await interaction.editReply({
     embeds: [
       embeds
         .brand('🔌 Game connection')
         .addFields(
-          field(
-            'Web server',
-            web?.enabled ? `${Emojis.CHECK} running` : `${Emojis.CROSS} disabled (WEB_ENABLED)`,
-            true,
-          ),
+          field('Roblox live stats', universe),
+          field('Web server', webState, true),
           field(
             'Ingest endpoint',
             web?.ingest?.configured
@@ -170,9 +238,12 @@ async function connection(interaction, client, gameData) {
   });
 }
 
-function notConnected() {
+function notConnected(universeConfigured = true) {
+  const live = universeConfigured
+    ? ''
+    : 'Set `ROBLOX_UNIVERSE_ID` in .env for live player counts from Roblox. ';
   return (
-    'Your game has not reported anything yet. Playtime, levels, purchases and events ' +
-    'cannot be read from Roblox — the game has to send them. Run `/game connection` to check setup.'
+    `No game data yet. ${live}Per-player playtime, levels and purchases cannot be read ` +
+    'from Roblox — the game has to send them. Run `/game connection` to check setup.'
   );
 }

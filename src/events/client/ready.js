@@ -5,6 +5,8 @@ import { ModerationService } from '../../systems/moderation/ModerationService.js
 import { TicketManager } from '../../systems/tickets/TicketManager.js';
 import { BugReportService } from '../../systems/qa/BugReportService.js';
 import { GameDataService } from '../../systems/game/GameDataService.js';
+import { RobloxService } from '../../systems/roblox/index.js';
+import { syncCommands } from '../../core/commandSync.js';
 import { TranscriptServer } from '../../web/TranscriptServer.js';
 import { IngestHandler } from '../../web/ingest.js';
 import { env } from '../../config/env.js';
@@ -35,6 +37,12 @@ export async function execute(client) {
 
   // Activity counters come before the systems that increment them.
   const activity = client.registerSystem('staffActivity', new StaffActivityService());
+
+  // Roblox public API. Needs no key; the ids only unlock extra detail.
+  client.registerSystem(
+    'roblox',
+    new RobloxService({ groupId: env.roblox.groupId, universeId: env.roblox.universeId }),
+  );
 
   const moderation = client.registerSystem(
     'moderation',
@@ -68,6 +76,11 @@ export async function execute(client) {
   // Kicked off now, not during connect: a build left pending by a failed
   // startup would keep the process alive with nothing to do.
   ensureIndexes();
+
+  // Make Discord's slash commands match this code. Without this, an update
+  // that renames or removes commands leaves users clicking commands the bot
+  // can no longer run — which is how "the bot stopped working" happened.
+  await syncCommands(client);
 
   // Warm the config cache so the first permission check of the day does not
   // pay for a database round trip.

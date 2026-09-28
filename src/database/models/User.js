@@ -15,9 +15,9 @@ const userSchema = new mongoose.Schema(
     username: { type: String, default: null }, // last seen tag, for transcripts
     displayName: { type: String, default: null },
 
-    // The Roblox link used to live here. It moved to the `RobloxProfile`
-    // collection, which is global rather than per-guild: a Roblox account
-    // belongs to the person, not to their membership of one server.
+    // No Roblox link is stored here. Pizza Bot does not verify which Discord
+    // user owns which Roblox account — Rover/Bloxlink do. A member's Roblox
+    // account is whatever they last gave in a ticket (see `Ticket.roblox`).
 
     stats: {
       warns: { type: Number, default: 0 },

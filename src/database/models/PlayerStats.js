@@ -8,9 +8,12 @@ import mongoose from 'mongoose';
  * your experience — that data only exists on your servers, so the game sends it
  * to the ingest endpoint and this is where it lands.
  *
- * Keyed by `robloxId`, not `discordId`: most players never link a Discord
- * account, and their stats still matter. The link is resolved through
- * `RobloxProfile` when one exists.
+ * Keyed by `robloxId`, not `discordId`: most players are not in the Discord
+ * at all, and their stats still matter.
+ *
+ * Account facts — display name, creation date, avatar, platform bans — are
+ * deliberately not stored here. They come live from the Roblox API (cached),
+ * so they are never stale and never duplicated.
  *
  * Counters are incremented, never recalculated, so the ingest path stays a
  * single `$inc` per event rather than a read-modify-write.
@@ -19,11 +22,8 @@ const playerStatsSchema = new mongoose.Schema(
   {
     guildId: { type: String, required: true, index: true },
     robloxId: { type: String, required: true, index: true },
+    /** Last name the game reported — used to find a player when Roblox is down. */
     robloxUsername: { type: String, default: null },
-    displayName: { type: String, default: null },
-
-    /** Account creation date, from the Roblox API when it lands. */
-    accountCreated: { type: Date, default: null },
 
     progression: {
       level: { type: Number, default: 0 },

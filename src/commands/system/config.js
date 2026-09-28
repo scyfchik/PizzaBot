@@ -231,14 +231,6 @@ export const data = new SlashCommandBuilder()
 
   .addSubcommand((sub) =>
     sub
-      .setName('roblox')
-      .setDescription('Roblox verification settings')
-      .addRoleOption((o) => o.setName('verified-role').setDescription('Role granted on verification'))
-      .addRoleOption((o) => o.setName('tester-role').setDescription('Roblox in-game tester role')),
-  )
-
-  .addSubcommand((sub) =>
-    sub
       .setName('moderation')
       .setDescription('Moderation history settings')
       .addBooleanOption((o) =>
@@ -278,8 +270,6 @@ export async function execute(interaction, { staff }) {
       return qaSettings(interaction, config);
     case 'game':
       return gameSettings(interaction, config);
-    case 'roblox':
-      return robloxSettings(interaction, config);
     case 'moderation':
       return moderationSettings(interaction, config);
   }
@@ -572,30 +562,6 @@ async function gameSettings(interaction, config) {
   return applyChanges(interaction, config, changes);
 }
 
-async function robloxSettings(interaction, config) {
-  const changes = [];
-
-  const verifiedRole = interaction.options.getRole('verified-role');
-  if (verifiedRole) {
-    config.roblox.verifiedRoleId = verifiedRole.id;
-    changes.push(`Verified role → ${verifiedRole}`);
-  }
-
-  const testerRole = interaction.options.getRole('tester-role');
-  if (testerRole) {
-    config.roblox.testerRoleId = testerRole.id;
-    changes.push(`Roblox tester role → ${testerRole}`);
-  }
-
-  if (changes.length) {
-    changes.push(
-      '_The Roblox API is not implemented — `/verify approve` is a manual staff vouch._',
-    );
-  }
-
-  return applyChanges(interaction, config, changes);
-}
-
 async function moderationSettings(interaction, config) {
   const changes = [];
   const mod = config.moderation;
@@ -679,8 +645,8 @@ async function view(interaction, config) {
       field(
         'Game data',
         `Events → ${channel(config.game.eventChannelId)} · alerts ${role(config.game.alertRoleId)}\n` +
-          `Version **${config.game.currentVersion ?? 'unset'}** · ` +
-          `Verified role ${role(config.roblox.verifiedRoleId)}`,
+          `Version **${config.game.currentVersion ?? 'unset'}**\n` +
+          '_Roblox universe and group ids are set in .env (ROBLOX_UNIVERSE_ID, ROBLOX_GROUP_ID)._',
       ),
       field(
         'Staff ranks',

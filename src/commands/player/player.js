@@ -3,7 +3,6 @@ import { User } from '../../database/models/User.js';
 import { Ticket } from '../../database/models/Ticket.js';
 import { Punishment } from '../../database/models/Punishment.js';
 import { BugReport } from '../../database/models/BugReport.js';
-import { RobloxProfile } from '../../database/models/RobloxProfile.js';
 import { StaffNote } from '../../database/models/StaffNote.js';
 import {
   Permission,
@@ -16,18 +15,23 @@ import {
 import { caseLine } from '../../systems/moderation/caseEmbeds.js';
 import { hasPermission } from '../../systems/staff/permissions.js';
 import { embeds, field, userLabel, padNumber, truncate } from '../../utils/embeds.js';
-import { fullTimestamp, timestamp, accountAgeDays } from '../../utils/time.js';
+import { fullTimestamp, timestamp } from '../../utils/time.js';
 import { UserError, PermissionError } from '../../core/errors.js';
 
 /**
- * Everything the studio knows about one person, in one command.
+ * Everything the studio knows about one player, in one command.
  *
- * This replaces the old `/profile`, `/history` and `/verify`. Those were three
- * commands answering one question — "who is this and what have they done" — and
- * splitting the answer across them meant staff ran all three every time.
+ * ## How a Discord member is matched to a Roblox account
  *
- * A player may be identified by Discord member **or** Roblox username, because
- * a purchase-support ticket usually arrives with only the latter.
+ * It is not verified, and Pizza Bot does not try to — Rover/Bloxlink own that.
+ * A Discord member's Roblox account is **the username they last gave in a
+ * ticket**, labelled as such wherever it is shown. Nothing is guessed from a
+ * nickname: a Discord user called "builderman" is not Roblox's builderman, and
+ * showing the wrong person's bans or purchases in a moderation decision is worse
+ * than showing nothing.
+ *
+ * Looking up by `roblox:` goes straight to the Roblox API and needs no Discord
+ * account at all — which is how purchase-support tickets usually arrive.
  */
 export const data = new SlashCommandBuilder()
   .setName('player')
@@ -35,11 +39,11 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('profile')
-      .setDescription('Full player profile — Discord, Roblox, game stats, support history')
-      .addUserOption((o) => o.setName('member').setDescription('Discord member'))
+      .setDescription('Roblox account, game stats and support history')
       .addStringOption((o) =>
-        o.setName('roblox').setDescription('Roblox username, if they are not in Discord'),
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
       )
+      .addUserOption((o) => o.setName('member').setDescription('Discord member'))
       .addBooleanOption((o) =>
         o.setName('public').setDescription('Post visibly (default: only you)'),
       ),
@@ -54,52 +58,32 @@ export const data = new SlashCommandBuilder()
     sub
       .setName('economy')
       .setDescription('Spend summary for a player')
-      .addUserOption((o) => o.setName('member').setDescription('Discord member'))
-      .addStringOption((o) => o.setName('roblox').setDescription('Roblox username')),
+      .addStringOption((o) =>
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
+      )
+      .addUserOption((o) => o.setName('member').setDescription('Discord member')),
   )
   .addSubcommand((sub) =>
     sub
       .setName('purchases')
       .setDescription('Recent transactions, including failures')
+      .addStringOption((o) =>
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
+      )
       .addUserOption((o) => o.setName('member').setDescription('Discord member'))
-      .addStringOption((o) => o.setName('roblox').setDescription('Roblox username'))
       .addIntegerOption((o) =>
         o.setName('limit').setDescription('How many (default 10)').setMinValue(1).setMaxValue(25),
       ),
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('link')
-      .setDescription('Link a Discord account to a Roblox username')
-      .addStringOption((o) =>
-        o
-          .setName('roblox')
-          .setDescription('Roblox username')
-          .setRequired(true)
-          .setMinLength(3)
-          .setMaxLength(20),
-      )
-      .addUserOption((o) =>
-        o.setName('member').setDescription('Staff only — defaults to you'),
-      ),
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('unlink')
-      .setDescription('Remove a Roblox link')
-      .addUserOption((o) => o.setName('member').setDescription('Staff only — defaults to you')),
   );
 
 export const meta = {
-  // Looking yourself up is open; looking up others is gated per-subcommand.
+  // Looking yourself up is open; everything else is gated per subcommand.
   permission: null,
   cooldown: 4,
 };
 
 export async function execute(interaction, { client, staff }) {
-  const sub = interaction.options.getSubcommand();
-
-  switch (sub) {
+  switch (interaction.options.getSubcommand()) {
     case 'profile':
       return profile(interaction, client, staff);
     case 'history':
@@ -108,56 +92,83 @@ export async function execute(interaction, { client, staff }) {
       return economy(interaction, client, staff);
     case 'purchases':
       return purchases(interaction, client, staff);
-    case 'link':
-      return link(interaction, staff);
-    case 'unlink':
-      return unlink(interaction, staff);
   }
+}
+
+// ------------------------------------------------------------------ resolution
+
+/**
+ * Work out who is being looked up.
+ *
+ * @returns {Promise<{
+ *   member: import('discord.js').GuildMember|null,
+ *   robloxName: string|null,
+ *   robloxSource: 'roblox'|'ticket'|null,
+ *   sourceTicketId: number|null,
+ *   roblox: object|null,
+ *   robloxUnavailable: boolean,
+ *   stats: object|null,
+ * }>}
+ */
+async function resolveTarget(interaction, client) {
+  const guildId = interaction.guildId;
+  const robloxInput = interaction.options.getString('roblox')?.trim() || null;
+  const players = client.getSystem('roblox').players;
+  const gameData = client.getSystem('gameData');
+
+  let member = null;
+  let robloxName = null;
+  let robloxSource = null;
+  let sourceTicketId = null;
+
+  if (robloxInput) {
+    robloxName = robloxInput;
+    robloxSource = 'roblox';
+  } else {
+    member = interaction.options.getMember('member') ?? interaction.member;
+
+    // The last Roblox username this member gave us in a ticket.
+    const ticket = await Ticket.findOne({
+      guildId,
+      openerId: member.id,
+      robloxUsername: { $ne: null },
+    })
+      .sort({ createdAt: -1 })
+      .select({ robloxUsername: 1, ticketId: 1 })
+      .lean();
+
+    if (ticket?.robloxUsername) {
+      robloxName = ticket.robloxUsername;
+      robloxSource = 'ticket';
+      sourceTicketId = ticket.ticketId;
+    }
+  }
+
+  const { profile: roblox, unavailable } = robloxName
+    ? await players.tryGetProfile(robloxName)
+    : { profile: null, unavailable: false };
+
+  // Game data is keyed by Roblox id. Fall back to the stored username when the
+  // Roblox API is down, so an outage does not hide data we already have.
+  const stats = roblox
+    ? await gameData.getStats(guildId, roblox.id)
+    : robloxName && !/^\d+$/.test(robloxName)
+      ? await gameData.findByUsername(guildId, robloxName)
+      : null;
+
+  return { member, robloxName, robloxSource, sourceTicketId, roblox, robloxUnavailable: unavailable, stats };
 }
 
 /**
- * Resolve the target from either option.
- * Returns `{ member, roblox, robloxId }` with whatever could be found.
+ * Looking up anyone but yourself needs `player.view`. A `roblox:` lookup always
+ * counts as "someone else": without verification, nobody can prove a Roblox
+ * account is theirs.
  */
-async function resolveTarget(interaction, client) {
+function guardAccess(interaction, staff) {
+  const isRobloxLookup = Boolean(interaction.options.getString('roblox'));
   const member = interaction.options.getMember('member');
-  const robloxName = interaction.options.getString('roblox');
+  const isSelf = !isRobloxLookup && (!member || member.id === interaction.user.id);
 
-  if (robloxName) {
-    const profileDoc = await RobloxProfile.findOne({
-      username: new RegExp(`^${robloxName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-    }).lean();
-
-    const stats = await client
-      .getSystem('gameData')
-      .findByUsername(interaction.guildId, robloxName);
-
-    return {
-      member: profileDoc
-        ? await interaction.guild.members.fetch(profileDoc.discordId).catch(() => null)
-        : null,
-      roblox: profileDoc ?? { username: robloxName, verified: false },
-      robloxId: profileDoc?.robloxId ?? stats?.robloxId ?? null,
-      stats,
-    };
-  }
-
-  const target = member ?? interaction.member;
-  const profileDoc = await RobloxProfile.findOne({ discordId: target.id }).lean();
-  const robloxId = profileDoc?.robloxId ?? null;
-
-  const stats = robloxId
-    ? await client.getSystem('gameData').getStats(interaction.guildId, robloxId)
-    : profileDoc?.username
-      ? await client.getSystem('gameData').findByUsername(interaction.guildId, profileDoc.username)
-      : null;
-
-  return { member: target, roblox: profileDoc, robloxId: robloxId ?? stats?.robloxId ?? null, stats };
-}
-
-/** Viewing anyone but yourself needs the node. */
-function guardOthers(interaction, staff, targetMember) {
-  const isSelf = targetMember && targetMember.id === interaction.user.id;
   if (!isSelf && !hasPermission(staff, Permission.PLAYER_VIEW)) {
     throw new PermissionError('You can look yourself up, but not other players.');
   }
@@ -166,80 +177,142 @@ function guardOthers(interaction, staff, targetMember) {
 // ------------------------------------------------------------------ profile
 
 async function profile(interaction, client, staff) {
+  guardAccess(interaction, staff);
+
   const isPublic = interaction.options.getBoolean('public') ?? false;
   await interaction.deferReply({ flags: isPublic ? undefined : MessageFlags.Ephemeral });
 
   const target = await resolveTarget(interaction, client);
-  guardOthers(interaction, staff, target.member);
 
-  if (!target.member && !target.roblox?.username && !target.stats) {
-    throw new UserError('No player found by that name, and they are not in this server.');
+  if (target.robloxSource === 'roblox' && !target.roblox && !target.robloxUnavailable) {
+    throw new UserError(`No Roblox account called **${target.robloxName}** exists.`);
   }
 
   const guildId = interaction.guildId;
-  const canSeeEconomy = hasPermission(staff, Permission.PLAYER_ECONOMY);
+  const canSeeEconomy = hasPermission(staff, Permission.PLAYER_ECONOMY) && !isPublic;
 
-  const [tickets, warnings, bans, bugs] = await Promise.all([
-    target.member ? Ticket.countDocuments({ guildId, openerId: target.member.id }) : 0,
-    target.member
-      ? Punishment.countDocuments({
+  // Discord members who used this Roblox name in a ticket — shown when the
+  // lookup started from Roblox, so staff can see who has claimed the account.
+  const claimants =
+    target.robloxSource === 'roblox' && target.roblox && !isPublic
+      ? await Ticket.distinct('openerId', {
           guildId,
-          userId: target.member.id,
-          type: PunishmentType.WARN,
-          active: true,
+          robloxUsername: new RegExp(`^${escapeRegex(target.roblox.name)}$`, 'i'),
         })
-      : 0,
-    target.member
-      ? Punishment.countDocuments({
-          guildId,
-          userId: target.member.id,
-          type: PunishmentType.BAN,
-          active: true,
-        })
-      : 0,
-    target.member ? BugReport.countDocuments({ guildId, reporterId: target.member.id }) : 0,
-  ]);
+      : [];
+
+  const memberId = target.member?.id ?? null;
+  const [tickets, warnings, bans, bugs] = memberId
+    ? await Promise.all([
+        Ticket.countDocuments({ guildId, openerId: memberId }),
+        Punishment.countDocuments({ guildId, userId: memberId, type: PunishmentType.WARN, active: true }),
+        Punishment.countDocuments({ guildId, userId: memberId, type: PunishmentType.BAN, active: true }),
+        BugReport.countDocuments({ guildId, reporterId: memberId }),
+      ])
+    : [0, 0, 0, 0];
 
   const embed = new EmbedBuilder()
-    .setColor(Colors.BRAND)
+    .setColor(target.roblox?.isBanned ? Colors.DANGER : Colors.BRAND)
     .setTitle(`${Emojis.PIZZA} Player Profile`)
     .setTimestamp();
 
-  if (target.member) {
-    embed
-      .setThumbnail(target.member.user.displayAvatarURL())
-      .addFields(
-        field('👤 Discord', `${target.member}\n\`${target.member.user.tag}\``, true),
+  // ----- Roblox (from the Roblox API)
+  if (target.roblox) {
+    const r = target.roblox;
+    embed.setURL(r.profileUrl);
+    if (r.headshotUrl) embed.setThumbnail(r.headshotUrl);
+
+    const nameLine =
+      r.displayName && r.displayName !== r.name
+        ? `**${r.displayName}** (@${r.name})`
+        : `**${r.name}**`;
+
+    embed.addFields(
+      field(
+        '🎮 Roblox',
+        `${nameLine}${r.hasVerifiedBadge ? ' ☑️' : ''}\nID \`${r.id}\`\n[Open profile](${r.profileUrl})`,
+        true,
+      ),
+      field(
+        '🗓️ Account',
+        r.created
+          ? `Created ${timestamp(r.created, 'D')}\n**${r.accountAgeDays.toLocaleString()} days** old`
+          : 'Creation date unknown',
+        true,
+      ),
+    );
+
+    if (r.groupRole) {
+      embed.addFields(field('🏷️ Studio group', `${r.groupRole.name} (rank ${r.groupRole.rank})`, true));
+    }
+
+    if (r.isBanned) {
+      embed.addFields(field('🚫 Banned by Roblox', 'This account is terminated on the Roblox platform.'));
+    }
+
+    if (r.previousNames.length && !isPublic) {
+      embed.addFields(field('📜 Previous usernames', r.previousNames.slice(0, 8).join(', ')));
+    }
+
+    if (target.robloxSource === 'ticket') {
+      embed.addFields(
         field(
-          '📅 Joined server',
-          target.member.joinedAt ? timestamp(target.member.joinedAt, 'R') : 'Unknown',
-          true,
-        ),
-        field(
-          '🗓️ Account age',
-          `${accountAgeDays(target.member.user.createdAt)} days`,
-          true,
+          'ℹ️ Source',
+          `Roblox account taken from ticket \`#${padNumber(target.sourceTicketId)}\` — self-reported, not verified.`,
         ),
       );
+    }
+
+    if (r.partial) embed.setFooter({ text: 'Some Roblox details could not be loaded.' });
+  } else if (target.robloxUnavailable) {
+    embed.addFields(
+      field(
+        '🎮 Roblox',
+        `\`${target.robloxName}\`\n⚠️ Roblox API unavailable right now — showing stored data only.`,
+        true,
+      ),
+    );
   } else {
-    embed.addFields(field('👤 Discord', '*not linked to a Discord account*', true));
+    embed.addFields(
+      field(
+        '🎮 Roblox',
+        '*No Roblox account known.*\nThey have not given one in a ticket — try `/player profile roblox:<name>`.',
+        true,
+      ),
+    );
   }
 
-  embed.addFields(field('🎮 Roblox', robloxBlock(target), true));
+  // ----- Discord
+  if (target.member) {
+    if (!target.roblox?.headshotUrl) embed.setThumbnail(target.member.user.displayAvatarURL());
+    embed.addFields(
+      field(
+        '👤 Discord',
+        `${target.member}\nJoined ${target.member.joinedAt ? timestamp(target.member.joinedAt, 'R') : 'unknown'}`,
+        true,
+      ),
+    );
+  } else if (claimants.length) {
+    embed.addFields(
+      field(
+        '👤 Claimed in tickets by',
+        claimants.slice(0, 5).map((id) => `<@${id}>`).join(', ') +
+          (claimants.length > 1 ? '\n⚠️ More than one Discord account used this name.' : ''),
+        true,
+      ),
+    );
+  }
 
-  // Game statistics, when the game has ever reported any.
+  // ----- In-game (reported by the game)
   if (target.stats) {
     const a = target.stats.activity ?? {};
     const p = target.stats.progression ?? {};
     embed.addFields(
       field(
-        '⏱️ In-game activity',
-        `Playtime **${formatPlaytime(a.playtimeMinutes)}**\n` +
-          `Sessions **${a.sessions ?? 0}** · Deaths **${a.deaths ?? 0}**\n` +
-          `Last seen ${a.lastSeenAt ? timestamp(a.lastSeenAt, 'R') : 'never'}`,
-        true,
+        '⏱️ In-game',
+        `Playtime **${formatPlaytime(a.playtimeMinutes)}** · Level **${p.level ?? 0}**\n` +
+          `Sessions **${a.sessions ?? 0}** · Last seen ${a.lastSeenAt ? timestamp(a.lastSeenAt, 'R') : 'never'}`,
       ),
-      field('📈 Progression', `Level **${p.level ?? 0}**\nXP **${(p.xp ?? 0).toLocaleString()}**`, true),
     );
 
     if (canSeeEconomy) {
@@ -247,57 +320,35 @@ async function profile(interaction, client, staff) {
       embed.addFields(
         field(
           '💳 Spend',
-          `**R$ ${(e.robuxSpent ?? 0).toLocaleString()}** across **${e.purchaseCount ?? 0}** purchase(s)\n` +
-            `${e.failedPurchaseCount ?? 0} failed · ${e.refundedCount ?? 0} refunded`,
-          true,
+          `**R$ ${(e.robuxSpent ?? 0).toLocaleString()}** · ${e.purchaseCount ?? 0} purchase(s)` +
+            `${e.failedPurchaseCount ? ` · **${e.failedPurchaseCount} failed**` : ''}`,
         ),
       );
     }
 
     if (target.stats.flags?.bannedInGame) {
       embed.addFields(
-        field(
-          '🚫 Banned in-game',
-          truncate(target.stats.flags.banReason ?? 'No reason recorded', 300),
-        ),
+        field('🚫 Banned in-game', truncate(target.stats.flags.banReason ?? 'No reason recorded', 300)),
       );
     }
-  } else {
+  } else if (target.roblox) {
+    embed.addFields(field('⏱️ In-game', '*No game data reported for this player yet.*'));
+  }
+
+  // ----- Support
+  if (target.member) {
     embed.addFields(
       field(
-        '⏱️ In-game activity',
-        '*No game data.*\nYour game has not reported anything for this player — see `/game stats`.',
+        '🎫 Support',
+        `Tickets **${tickets}** · Bugs reported **${bugs}**` +
+          (isPublic ? '' : `\nActive warnings **${warnings}** · Active bans **${bans}**`),
       ),
     );
   }
 
-  embed.addFields(
-    field(
-      '🎫 Support',
-      `Tickets **${tickets}** · Bugs reported **${bugs}**\n` +
-        `Active warnings **${warnings}** · Active bans **${bans}**`,
-    ),
-  );
-
-  if (isPublic) {
-    embed.setFooter({ text: 'Posted publicly — moderation detail is hidden.' });
-  }
+  if (isPublic) embed.setFooter({ text: 'Posted publicly — moderation and spend detail hidden.' });
 
   await interaction.editReply({ embeds: [embed] });
-}
-
-function robloxBlock(target) {
-  if (!target.roblox?.username && !target.stats?.robloxUsername) return '*not linked*';
-
-  const username = target.roblox?.username ?? target.stats?.robloxUsername;
-  const verified = target.roblox?.verified;
-  const id = target.robloxId;
-
-  return (
-    `\`${username}\`\n` +
-    (id ? `ID \`${id}\`\n` : '') +
-    (verified ? `${Emojis.CHECK} verified` : '⚠️ unverified')
-  );
 }
 
 function formatPlaytime(minutes) {
@@ -306,6 +357,10 @@ function formatPlaytime(minutes) {
   if (hours < 1) return `${minutes}m`;
   if (hours < 100) return `${hours}h ${minutes % 60}m`;
   return `${hours.toLocaleString()}h`;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ------------------------------------------------------------------ history
@@ -356,7 +411,7 @@ async function history(interaction, staff) {
             (t) =>
               `\`#${padNumber(t.ticketId)}\` ${t.category} · ${
                 t.status === TicketStatus.CLOSED ? 'closed' : 'open'
-              }`,
+              }${t.robloxUsername ? ` · Roblox \`${t.robloxUsername}\`` : ''}`,
           )
           .join('\n'),
       ),
@@ -388,42 +443,41 @@ async function economy(interaction, client, staff) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const target = await resolveTarget(interaction, client);
-  if (!target.robloxId) throw new UserError(noGameDataMessage(target));
+  const robloxId = target.roblox?.id ?? target.stats?.robloxId ?? null;
+  if (!robloxId) throw new UserError(noRobloxMessage(target));
 
   const gameData = client.getSystem('gameData');
   const [summary, recent] = await Promise.all([
-    gameData.economySummary(interaction.guildId, target.robloxId),
-    gameData.purchases(interaction.guildId, target.robloxId, 1),
+    gameData.economySummary(interaction.guildId, robloxId),
+    gameData.purchases(interaction.guildId, robloxId, 1),
   ]);
 
   const last = recent[0];
+  const embed = embeds
+    .brand('💳 Economy History')
+    .addFields(
+      field('Player', displayName(target, robloxId), true),
+      field('Robux spent', `**R$ ${summary.robuxSpent.toLocaleString()}**`, true),
+      field('Purchases', String(summary.completed), true),
+      field('Failed purchases', String(summary.failed), true),
+      field('Refunded', `${summary.refunded} (R$ ${summary.robuxRefunded.toLocaleString()})`, true),
+      field(
+        'Last purchase',
+        last
+          ? `**${last.productName ?? last.productId ?? 'Unknown'}**\n${fullTimestamp(last.purchasedAt)}`
+          : 'None recorded',
+        true,
+      ),
+    )
+    .setFooter({
+      text:
+        summary.failed > 0
+          ? 'Failed purchases are the usual cause of purchase-support tickets.'
+          : 'Reported by the game.',
+    });
 
-  await interaction.editReply({
-    embeds: [
-      embeds
-        .brand('💳 Economy History')
-        .addFields(
-          field('Player', target.roblox?.username ?? target.stats?.robloxUsername ?? target.robloxId, true),
-          field('Robux spent', `**R$ ${summary.robuxSpent.toLocaleString()}**`, true),
-          field('Purchases', String(summary.completed), true),
-          field('Failed purchases', String(summary.failed), true),
-          field('Refunded', `${summary.refunded} (R$ ${summary.robuxRefunded.toLocaleString()})`, true),
-          field(
-            'Last purchase',
-            last
-              ? `**${last.productName ?? last.productId ?? 'Unknown'}**\n${fullTimestamp(last.purchasedAt)}`
-              : 'None recorded',
-            true,
-          ),
-        )
-        .setFooter({
-          text:
-            summary.failed > 0
-              ? 'Failed purchases are the usual cause of purchase-support tickets.'
-              : 'Reported by the game.',
-        }),
-    ],
-  });
+  if (target.roblox?.headshotUrl) embed.setThumbnail(target.roblox.headshotUrl);
+  await interaction.editReply({ embeds: [embed] });
 }
 
 // ------------------------------------------------------------------ purchases
@@ -435,13 +489,11 @@ async function purchases(interaction, client, staff) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const target = await resolveTarget(interaction, client);
-  if (!target.robloxId) throw new UserError(noGameDataMessage(target));
+  const robloxId = target.roblox?.id ?? target.stats?.robloxId ?? null;
+  if (!robloxId) throw new UserError(noRobloxMessage(target));
 
   const limit = interaction.options.getInteger('limit') ?? 10;
-  const rows = await client
-    .getSystem('gameData')
-    .purchases(interaction.guildId, target.robloxId, limit);
-
+  const rows = await client.getSystem('gameData').purchases(interaction.guildId, robloxId, limit);
   if (!rows.length) throw new UserError('No transactions recorded for that player.');
 
   const icon = {
@@ -454,7 +506,7 @@ async function purchases(interaction, client, staff) {
   await interaction.editReply({
     embeds: [
       embeds
-        .brand(`💳 Transactions — ${target.roblox?.username ?? target.robloxId}`)
+        .brand(`💳 Transactions — ${displayName(target, robloxId)}`)
         .setDescription(
           rows
             .map(
@@ -471,88 +523,16 @@ async function purchases(interaction, client, staff) {
   });
 }
 
-function noGameDataMessage(target) {
+function displayName(target, robloxId) {
+  return target.roblox?.name ?? target.stats?.robloxUsername ?? target.robloxName ?? robloxId;
+}
+
+function noRobloxMessage(target) {
+  if (target.robloxSource === 'roblox') {
+    return `No Roblox account called **${target.robloxName}** exists.`;
+  }
   return (
-    `No Roblox ID for ${target.roblox?.username ?? 'that player'}. ` +
-    'Either they have not linked an account (`/player link`), or your game has not reported them yet.'
+    'No Roblox account known for that member — they have not given one in a ticket. ' +
+    'Use `roblox:<username>` instead.'
   );
-}
-
-// ------------------------------------------------------------------ linking
-
-async function link(interaction, staff) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-  const requested = interaction.options.getMember('member');
-  const isSelf = !requested || requested.id === interaction.user.id;
-
-  if (!isSelf && !hasPermission(staff, Permission.PLAYER_LINK_MANAGE)) {
-    throw new PermissionError("You can link your own account, but not someone else's.");
-  }
-
-  const member = requested ?? interaction.member;
-  const username = interaction.options.getString('roblox').trim();
-
-  if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
-    throw new UserError('Roblox usernames are 3–20 characters: letters, numbers and underscores.');
-  }
-
-  const existing = await RobloxProfile.findOne({ discordId: member.id });
-  if (existing?.verified && isSelf) {
-    throw new UserError(
-      `Your account is already verified as **${existing.username}**. Ask staff to unlink it first.`,
-    );
-  }
-
-  await RobloxProfile.findOneAndUpdate(
-    { discordId: member.id },
-    {
-      $set: {
-        username,
-        // Staff linking someone counts as a vouch; self-linking does not.
-        verified: !isSelf,
-        verifiedAt: !isSelf ? new Date() : null,
-        verificationMethod: !isSelf ? 'manual' : null,
-        verifiedBy: !isSelf ? interaction.user.id : null,
-      },
-      $setOnInsert: { discordId: member.id },
-    },
-    { upsert: true, setDefaultsOnInsert: true },
-  );
-
-  await interaction.editReply({
-    embeds: [
-      embeds
-        .success(`${member} linked to Roblox **${username}**.`)
-        .addFields(
-          field(
-            'Status',
-            isSelf
-              ? '⚠️ **Unverified** — this is a self-reported name. Staff can confirm it by running the same command with `member:` set.'
-              : `${Emojis.CHECK} **Verified** by ${interaction.user} — a manual vouch, not an API check.`,
-          ),
-        ),
-    ],
-  });
-}
-
-async function unlink(interaction, staff) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-  const requested = interaction.options.getMember('member');
-  const isSelf = !requested || requested.id === interaction.user.id;
-
-  if (!isSelf && !hasPermission(staff, Permission.PLAYER_LINK_MANAGE)) {
-    throw new PermissionError("You can unlink your own account, but not someone else's.");
-  }
-
-  const member = requested ?? interaction.member;
-  const existing = await RobloxProfile.findOne({ discordId: member.id });
-  if (!existing) throw new UserError('No Roblox link on record.');
-
-  await RobloxProfile.deleteOne({ discordId: member.id });
-
-  await interaction.editReply({
-    embeds: [embeds.success(`Unlinked **${existing.username ?? 'unknown'}** from ${member}.`)],
-  });
 }

@@ -166,15 +166,9 @@ const guildConfigSchema = new mongoose.Schema(
       currentVersion: { type: String, default: null },
     },
 
-    /** Reserved — read by the Roblox services when that integration lands. */
-    roblox: {
-      enabled: { type: Boolean, default: false },
-      groupId: { type: String, default: null },
-      universeId: { type: String, default: null },
-      verifiedRoleId: { type: String, default: null },
-      testerRoleId: { type: String, default: null },
-      announcementChannelId: channelId,
-    },
+    // Roblox group and universe ids live in .env (ROBLOX_GROUP_ID,
+    // ROBLOX_UNIVERSE_ID): they describe the studio, not a Discord server.
+    // There is no verified-role setting — verification is Rover's job.
 
     schemaVersion: { type: Number, default: 1 },
   },

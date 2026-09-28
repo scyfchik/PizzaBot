@@ -48,22 +48,21 @@ Everything is grouped under a noun, so related things live together.
 
 ```
 Players
-  /player profile     Discord + Roblox + game stats + support history
+  /player profile     Roblox account (via Roblox API) + game stats + support history
   /player history     moderation and support record
   /player economy     spend summary
   /player purchases   transactions, including failures
-  /player link        link a Roblox account   (/player unlink)
 
 Support
   /tickets list       browse the queue        (/tickets queue, /tickets stats)
-  /ticket view        one ticket              (/ticket history <member>)
+  /ticket info        one ticket by number
   /ticket add · note · priority · transfer
   /transcript link · revoke · info
 
 Game
-  /game stats         players online, servers, spend
+  /game stats         live players/visits from Roblox + your game's own data
   /game events        raw reported event feed
-  /game connection    is the game wired up?
+  /game connection    Roblox API, web server and ingest status
 
 Staff
   /staff profile      rank, permissions, recent activity
@@ -73,22 +72,28 @@ Staff
 QA
   /bug report · view · list · assign · status · stats
 
-Security
+Security & moderation history
   /security logs      searchable audit trail  (/security summary)
   /security lockdown · unlock · status
-
-Moderation (record-keeping)
-  /warn  /timeout  /kick  /ban  /unban  /clear
   /case view · reason · evidence · note · appeal · void
 
 Setup
   /setup   /config   /panel
 ```
 
-Renamed from earlier versions: `/staffinfo` → `/staff profile`, `/history` →
-`/player history`, `/profile` → `/player profile`, `/verify` → `/player link`,
-`/lockdown` → `/security lockdown`. `/changelog` was removed — announcements
-belong in a bot built for them.
+Pizza Bot does **not** issue punishments or verify accounts — Dyno/Carl-bot
+moderate, Rover/Bloxlink verify. Punishments issued by those bots are recorded
+automatically from the Discord audit log, so `/player history` and ban appeals
+still see them.
+
+Removed in earlier versions: `/warn /kick /ban /unban /timeout /clear`,
+`/verify` and `/player link`, `/changelog`. Renamed: `/staffinfo` →
+`/staff profile`, `/history` → `/player history`, `/profile` →
+`/player profile`, `/lockdown` → `/security lockdown`.
+
+**Slash commands register themselves.** On every start the bot compares its
+commands with Discord's and re-registers only if they differ, so an update can
+never again leave users clicking commands the bot no longer has.
 
 ### Permissions
 

@@ -291,12 +291,18 @@ async function checkDiscord() {
 
   // Privileged intents must be enabled in the Developer Portal, or the bot
   // connects fine and then silently never sees members or message content.
-  const guild = await client.guilds.fetch(env.discord.guildId).catch(() => null);
+  // `force` goes to the REST API. Straight after login the cached entry can be
+  // a placeholder from the gateway handshake with no name or member count yet,
+  // which is why this used to print "undefined · undefined members".
+  const guild = await client.guilds
+    .fetch({ guild: env.discord.guildId, force: true, withCounts: true })
+    .catch(() => null);
   if (!guild) {
     fail('Guild', `${env.discord.guildId} not found — is the bot invited to it?`);
     return;
   }
-  ok('Guild', `${guild.name} · ${guild.memberCount} members`);
+  const members = guild.approximateMemberCount ?? guild.memberCount;
+  ok('Guild', `${guild.name}${members ? ` · ${members.toLocaleString()} members` : ''}`);
 
   const me = await guild.members.fetchMe();
 
@@ -376,12 +382,25 @@ async function checkDiscord() {
   } else {
     const onDisk = new Set(client.commands.commands.keys());
     const live = new Set(registered.map((c) => c.name));
-    const notDeployed = [...onDisk].filter((n) => !live.has(n));
-    const stale = [...live].filter((n) => !onDisk.has(n));
+    const notDeployed = [...onDisk].filter((n) => !live.has(n)).sort();
+    const stale = [...live].filter((n) => !onDisk.has(n)).sort();
 
-    if (notDeployed.length) warn('Deployed commands', `not deployed: ${notDeployed.map((n) => `/${n}`).join(', ')} — run npm run deploy`);
-    else if (stale.length) warn('Deployed commands', `stale on Discord: ${stale.map((n) => `/${n}`).join(', ')} — run npm run deploy`);
-    else ok('Deployed commands', `${live.size} in sync`);
+    if (!notDeployed.length && !stale.length) {
+      ok('Deployed commands', `${live.size} in sync`);
+    } else {
+      // Both lists, always. Stale commands are the dangerous half: users see
+      // them in Discord and the bot cannot run them, which reads as "the bot
+      // stopped working" with nothing in the logs to explain it.
+      const parts = [];
+      if (stale.length) parts.push(`in Discord but gone from code: ${stale.map((n) => `/${n}`).join(', ')}`);
+      if (notDeployed.length) parts.push(`in code but not in Discord: ${notDeployed.map((n) => `/${n}`).join(', ')}`);
+
+      const fix = env.autoDeployCommands
+        ? 'will be fixed automatically on the next bot start (AUTO_DEPLOY_COMMANDS is on)'
+        : 'run npm run deploy';
+
+      (env.autoDeployCommands ? warn : fail)('Deployed commands', `${parts.join(' · ')} — ${fix}`);
+    }
   }
 }
 

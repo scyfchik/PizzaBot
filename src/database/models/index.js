@@ -13,7 +13,6 @@ export { SecurityLog } from './SecurityLog.js';
 export { StaffNote } from './StaffNote.js';
 export { StaffActivity } from './StaffActivity.js';
 export { BugReport } from './BugReport.js';
-export { RobloxProfile } from './RobloxProfile.js';
 export { Transcript, generateToken, hashToken } from './Transcript.js';
 export { PlayerStats } from './PlayerStats.js';
 export { Purchase } from './Purchase.js';

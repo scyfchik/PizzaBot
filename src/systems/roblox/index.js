@@ -1,18 +1,27 @@
+import { RobloxApi } from './RobloxApi.js';
+import { PlayerLookupService } from './PlayerLookupService.js';
+import { GameStatusService } from './GameStatusService.js';
+
 /**
- * Roblox integration — scaffolding only. No API calls are made anywhere.
+ * Roblox integration — public web APIs only.
  *
- * Three services, matching the three things the community actually needs:
+ *   players  who a Roblox account is: id, age, avatar, bans, old names, group rank
+ *   game     live stats for the studio's experience: players, visits, favourites
  *
- *   RobloxVerificationService  link a Discord account to a Roblox account
- *   PlayerLookupService        resolve usernames, profiles, group ranks
- *   GameStatusService          live player counts, update announcements
+ * Both share one API client, so they share one cache and one set of timeouts.
  *
- * Nothing registers these with the client yet. When the integration is built,
- * `ready.js` gains three `registerSystem` calls and the commands that use them
- * are added — no schema migration, no config format change, because
- * `User.roblox` and `GuildConfig.roblox` are already in place.
+ * Verification — proving which Discord user owns which Roblox account — is not
+ * here, on purpose. Rover/Bloxlink do that. Pizza Bot only ever looks up a
+ * Roblox account by a name or id it was given.
  */
-export { RobloxVerificationService } from './RobloxVerificationService.js';
+export class RobloxService {
+  constructor({ groupId = null, universeId = null } = {}) {
+    this.api = new RobloxApi();
+    this.players = new PlayerLookupService(this.api, { groupId });
+    this.game = new GameStatusService(this.api, { universeId });
+  }
+}
+
+export { RobloxApi, RobloxApiError } from './RobloxApi.js';
 export { PlayerLookupService } from './PlayerLookupService.js';
 export { GameStatusService } from './GameStatusService.js';
-export { NotImplementedError } from './errors.js';

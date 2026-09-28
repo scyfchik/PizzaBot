@@ -170,15 +170,11 @@ deleted, the bug stays open until a build fixes it. Linked by `ticketId`. Every
 status transition is appended to `history`, so a bug that was rejected and later
 reopened does not read as though it was always open.
 
-**`RobloxProfile`** — **global, not per-guild.** A Roblox account belongs to the
-person, not to their membership of one server; storing it per-guild would mean
-re-verifying everywhere and holding the same link N times with N chances to
-disagree. This replaced the embedded `User.roblox` block. `verified` defaults to
-`false` and nothing treats an unverified row as identity.
-
-**`Changelog`** — stored as well as posted, so an announcement can be corrected
-and re-rendered from the record, and `BugReport.fixedInVersion` can point at a
-version that actually exists.
+**No Roblox-link collection.** An earlier `RobloxProfile` collection stored
+claimed Discord↔Roblox links; it was removed along with verification, which
+belongs to Rover/Bloxlink. Account facts now come live from the Roblox API, and
+the account a ticket is about is snapshotted on the ticket itself
+(`Ticket.roblox`) when it opens.
 
 ### The original seven
 
@@ -545,25 +541,52 @@ fresh server has nobody who can run `/setup`.
 
 ---
 
-## 7. Roblox integration (storage live, API still not implemented)
+## 7. Roblox integration (public API, no verification)
 
-**No API call is made anywhere.** What exists now:
+`src/systems/roblox/` talks to Roblox's **public** web APIs with Node's built-in
+`fetch` — no SDK, no dependency, no API key. Response shapes were checked against
+the live API, and `npm run test:roblox-live` re-checks them.
 
-- `RobloxProfile` — the global link collection, with `verified` defaulting to
-  `false`.
-- `/verify link` records a *claimed* username. `/verify approve` lets staff
-  vouch for it manually and grants the verified role.
-- `/profile`, `/history` and the ticket embed all label unverified links as
-  unverified, and never display an unresolved Roblox ID — printing one would
-  imply a check that has not happened.
-- Three services with documented signatures, every method still throwing
-  `NotImplementedError`.
+| Service | Endpoint | Gives |
+|---|---|---|
+| `players.resolveUsername` | `users.roblox.com/v1/usernames/users` | id, display name |
+| `players.getUser` | `users.roblox.com/v1/users/{id}` | creation date, platform ban |
+| `players.getHeadshot` | `thumbnails.roblox.com/.../avatar-headshot` | avatar URL |
+| `players.getUsernameHistory` | `users.roblox.com/.../username-history` | previous names |
+| `players.getStudioGroupRole` | `groups.roblox.com/v2/users/{id}/groups/roles` | rank in `ROBLOX_GROUP_ID` |
+| `game.getStats` | `games.roblox.com/v1/games` + `/votes` | playing, visits, favourites, rating |
 
-A manual vouch records a *staff member's judgement*, not proof. When the API
-lands it replaces `/verify approve`'s guesswork with a profile-code check and
-fills in `robloxId` — no schema migration, no command changes.
+Where it is used:
 
-See `src/systems/roblox/README.md`.
+- **Ticket open** — the Roblox username a player types is resolved in parallel
+  with channel creation, and the result snapshotted on the ticket. The header
+  shows `name (ID: …)`, avatar, account age, and flags accounts under 30 days
+  old, Roblox platform bans and previous usernames. A username that does not
+  exist is flagged — which on an appeal is itself information.
+- **`/player profile roblox:<name>`** — full account view, no Discord needed.
+- **`/game stats`** — live players online and visits from day one, before the
+  in-game reporter is installed.
+- **Transcripts** — the Roblox id now reaches the player-context card, which
+  was always empty before.
+
+Rules the client follows, because it runs inside ticket creation:
+
+1. **Bounded time** — 6-second timeout, one retry on 429/5xx.
+2. **Not found is not an error** — returns `null`.
+3. **Outages are contained** — `tryGetProfile` never throws; a ticket opens
+   with "Roblox lookup unavailable" rather than failing.
+4. **Cached** — usernames and accounts for an hour, avatars six hours, game
+   stats one minute; misses are cached too; capped at 5,000 entries.
+
+**No verification.** Pizza Bot never decides which Discord user owns which
+Roblox account — that is Rover's job. A member's Roblox account is the username
+they last gave in a ticket, and it is always labelled *self-reported*. Nothing
+is guessed from a nickname: a Discord user called "builderman" is not Roblox's
+builderman, and showing the wrong person's bans in a moderation decision is
+worse than showing nothing.
+
+Per-player playtime, levels and purchases are still not available from Roblox —
+those come from the game through the ingest endpoint (`docs/GAME-INTEGRATION.md`).
 
 ---
 

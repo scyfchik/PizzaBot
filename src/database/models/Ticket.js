@@ -70,6 +70,29 @@ const ticketSchema = new mongoose.Schema(
     /** Convenience mirror of the Roblox username answer, for cross-referencing. */
     robloxUsername: { type: String, default: null, index: true, sparse: true },
 
+    /**
+     * What the Roblox API said about that username when the ticket opened.
+     *
+     * Snapshotted rather than looked up on every render: the header is rewritten
+     * on each claim and close, and hitting Roblox each time would make those
+     * buttons slow and dependent on a third party. It also means the ticket
+     * records what staff saw at the time — if the account is later renamed or
+     * banned, the ticket still shows what it was.
+     *
+     * `status`: `found`, `not_found` (no such account — worth noticing on an
+     * appeal), `unavailable` (Roblox was down), or null (no username given).
+     */
+    roblox: {
+      status: { type: String, default: null, enum: ['found', 'not_found', 'unavailable', null] },
+      id: { type: String, default: null, index: true, sparse: true },
+      name: { type: String, default: null },
+      displayName: { type: String, default: null },
+      accountAgeDays: { type: Number, default: null },
+      isBanned: { type: Boolean, default: null },
+      headshotUrl: { type: String, default: null },
+      previousNames: { type: [String], default: [] },
+    },
+
     claimedBy: { type: String, default: null, index: true },
     claimedByTag: { type: String, default: null },
     claimedAt: { type: Date, default: null },

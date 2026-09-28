@@ -18,7 +18,6 @@ import {
 } from './components.js';
 import { generateTranscript, toTranscriptMessages } from './transcript.js';
 import { Transcript, generateToken, hashToken } from '../../database/models/Transcript.js';
-import { RobloxProfile } from '../../database/models/RobloxProfile.js';
 import { embeds, padNumber, field } from '../../utils/embeds.js';
 import { safeAction, trySendDM } from '../../utils/safeAction.js';
 import { hasPermission } from '../staff/permissions.js';
@@ -130,7 +129,15 @@ export class TicketManager {
     // leaves a gap rather than two tickets sharing a number.
     const ticketId = await Counter.next(CounterScope.ticket(guild.id));
 
-    const channel = await this.#createChannel(guild, config, category, opener, ticketId);
+    const robloxUsername = responses.find((r) => r.key === 'roblox_username')?.value?.trim() || null;
+
+    // The Roblox lookup runs alongside channel creation rather than after it,
+    // so it adds no latency to opening a ticket. It never throws: if Roblox is
+    // down the ticket opens anyway and says so.
+    const [channel, roblox] = await Promise.all([
+      this.#createChannel(guild, config, category, opener, ticketId),
+      this.#lookupRoblox(robloxUsername),
+    ]);
 
     const ticket = await Ticket.create({
       ticketId,
@@ -143,7 +150,8 @@ export class TicketManager {
       status: TicketStatus.OPEN,
       priority: category.priority,
       responses,
-      robloxUsername: responses.find((r) => r.key === 'roblox_username')?.value ?? null,
+      robloxUsername,
+      roblox,
       lastUserMessageAt: new Date(),
     });
 
@@ -155,6 +163,32 @@ export class TicketManager {
     log.info({ ticketId, category: categoryKey, opener: opener.id }, 'Ticket opened');
 
     return { ticket, channel };
+  }
+
+  /**
+   * Snapshot the opener's Roblox account for the ticket.
+   * Never throws — support must not depend on Roblox being up.
+   */
+  async #lookupRoblox(username) {
+    if (!username) return { status: null };
+
+    const roblox = this.client.systems.get('roblox');
+    if (!roblox) return { status: 'unavailable', name: username };
+
+    const { profile, unavailable } = await roblox.players.tryGetProfile(username);
+    if (unavailable) return { status: 'unavailable', name: username };
+    if (!profile) return { status: 'not_found', name: username };
+
+    return {
+      status: 'found',
+      id: profile.id,
+      name: profile.name,
+      displayName: profile.displayName,
+      accountAgeDays: profile.accountAgeDays,
+      isBanned: profile.isBanned,
+      headshotUrl: profile.headshotUrl,
+      previousNames: profile.previousNames.slice(0, 5),
+    };
   }
 
   async #createChannel(guild, config, category, opener, ticketId) {
@@ -619,16 +653,18 @@ export class TicketManager {
 
       Object.assign(context, { previousTickets, activeWarnings, totalPunishments });
 
-      // Game data, when the player is linked and the game has reported them.
-      const profile = await RobloxProfile.findOne({ discordId: ticket.openerId }).lean();
+      // The Roblox id resolved when the ticket opened — the snapshot, not a new
+      // lookup, so the transcript matches what staff saw in the ticket.
+      if (ticket.roblox?.id) context.robloxId = ticket.roblox.id;
+
+      // Game data, when the game has reported this player.
       const gameData = this.client.systems.get('gameData');
       if (!gameData) return context;
 
-      const username = profile?.username ?? ticket.robloxUsername;
-      const stats = profile?.robloxId
-        ? await gameData.getStats(guild.id, profile.robloxId)
-        : username
-          ? await gameData.findByUsername(guild.id, username)
+      const stats = ticket.roblox?.id
+        ? await gameData.getStats(guild.id, ticket.roblox.id)
+        : ticket.robloxUsername
+          ? await gameData.findByUsername(guild.id, ticket.robloxUsername)
           : null;
 
       if (!stats) return context;

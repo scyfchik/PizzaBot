@@ -1,50 +1,80 @@
-import { NotImplementedError } from './errors.js';
+import { createLogger } from '../../utils/logger.js';
+
+const log = createLogger('roblox-game');
 
 /**
- * Game status and update announcements.
+ * Public statistics for the studio's experience, straight from Roblox.
  *
- * NOT IMPLEMENTED. Contract only.
+ * This works with **no game-side setup at all** — just `ROBLOX_UNIVERSE_ID`.
+ * Players online, total visits, favourites and likes come from Roblox's public
+ * games API, so `/game stats` shows real numbers from day one, before anyone
+ * has wired the in-game reporter.
  *
- * Purpose: a support bot that knows the game is down can answer half the
- * tickets before they are opened — "servers are offline, we know, here is the
- * status" is better than five identical bug reports.
- *
- * Planned:
- *   - poll `games.roblox.com/v1/games?universeIds=` for player counts and
- *     whether the place is playable
- *   - post an announcement embed when a new version ships
- *   - optionally auto-disable the Bug Report ticket category during a known
- *     outage, using `GuildConfig.tickets.disabledCategories`
+ * What it cannot give you is anything per-player (playtime, level, purchases).
+ * That still has to come from the game through the ingest endpoint.
  */
 export class GameStatusService {
-  constructor(client, config = {}) {
-    this.client = client;
-    this.config = config;
-    this.enabled = false;
+  /**
+   * @param {import('./RobloxApi.js').RobloxApi} api
+   * @param {{ universeId?: string|null }} options
+   */
+  constructor(api, { universeId = null } = {}) {
+    this.api = api;
+    this.universeId = universeId ? String(universeId) : null;
+  }
+
+  get configured() {
+    return Boolean(this.universeId);
   }
 
   /**
-   * @returns {Promise<{ playing: number, visits: number, maxPlayers: number, isPlayable: boolean }>}
+   * Live experience stats. Cached for a minute: the player count moves, but
+   * not so fast that a Discord command needs a fresh request every time.
+   *
+   * @returns {Promise<null | {
+   *   universeId: string, placeId: string, name: string, creator: string,
+   *   playing: number, visits: number, favorites: number, maxPlayers: number,
+   *   upVotes: number|null, downVotes: number|null, likeRatio: number|null,
+   *   created: Date|null, updated: Date|null, url: string
+   * }>}
    */
-  async getGameStats() {
-    throw new NotImplementedError('GameStatusService.getGameStats');
-  }
+  async getStats() {
+    if (!this.universeId) return null;
 
-  /** Is the universe currently up and joinable? */
-  async isOnline() {
-    throw new NotImplementedError('GameStatusService.isOnline');
-  }
+    return this.api.cached(`universe:${this.universeId}`, 60_000, async () => {
+      const [games, votes] = await Promise.allSettled([
+        this.api.request(`https://games.roblox.com/v1/games?universeIds=${this.universeId}`),
+        this.api.request(`https://games.roblox.com/v1/games/votes?universeIds=${this.universeId}`),
+      ]);
 
-  /**
-   * Post an update announcement.
-   * @param {{ version: string, title: string, changes: string[], media?: string }} update
-   */
-  async publishUpdate(update) {
-    throw new NotImplementedError('GameStatusService.publishUpdate');
-  }
+      if (games.status === 'rejected') throw games.reason;
+      const game = games.value?.data?.[0];
+      if (!game) {
+        log.warn({ universeId: this.universeId }, 'Universe not found — check ROBLOX_UNIVERSE_ID');
+        return null;
+      }
 
-  /** Start polling. Called from ready.js once the integration is enabled. */
-  startPolling(intervalMs = 300_000) {
-    throw new NotImplementedError('GameStatusService.startPolling');
+      // Votes are a nice-to-have; losing them must not lose the player count.
+      const vote = votes.status === 'fulfilled' ? votes.value?.data?.[0] : null;
+      const up = vote?.upVotes ?? null;
+      const down = vote?.downVotes ?? null;
+
+      return {
+        universeId: String(game.id),
+        placeId: String(game.rootPlaceId),
+        name: game.name,
+        creator: game.creator?.name ?? 'Unknown',
+        playing: game.playing ?? 0,
+        visits: game.visits ?? 0,
+        favorites: game.favoritedCount ?? 0,
+        maxPlayers: game.maxPlayers ?? 0,
+        upVotes: up,
+        downVotes: down,
+        likeRatio: up != null && down != null && up + down > 0 ? up / (up + down) : null,
+        created: game.created ? new Date(game.created) : null,
+        updated: game.updated ? new Date(game.updated) : null,
+        url: `https://www.roblox.com/games/${game.rootPlaceId}`,
+      };
+    });
   }
 }

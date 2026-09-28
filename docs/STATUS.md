@@ -1,11 +1,37 @@
 # Project Status Report
 
 **Pizza Guy's Time — Discord infrastructure bot**
-Report date: 18 September 2026 · Version 0.1.0 · Not yet run against a live server
 
 ---
 
-## Summary
+## Update — 28 September 2026
+
+**The bot is live** (Pizza Bot#7839 in "Shawarma Games"), and on this date it
+"stopped working". Diagnosis and changes:
+
+- **Cause:** after the command refactor, slash commands were never re-registered.
+  Discord held 12 commands the code no longer had (`/warn`, `/verify`,
+  `/profile`, …) and was missing 5 new ones (`/player`, `/game`, …). No code,
+  token, database or permission problem — confirmed by a live `doctor` login.
+- **Permanent fix:** the bot now syncs slash commands on every start
+  (`src/core/commandSync.js`), re-registering only when they differ.
+  `AUTO_DEPLOY_COMMANDS=false` turns it off.
+- **Verification removed** — `/player link`, the `RobloxProfile` collection and
+  the verified-role setting. Rover/Bloxlink own that.
+- **Roblox API added** — public endpoints, no key. Tickets, `/player profile`,
+  `/game stats` and transcripts now show real Roblox data.
+- **A real test suite now lives in the repo** — `npm test` (90 tests, hermetic:
+  never touches the real `.env`, database or Discord) and
+  `npm run test:roblox-live` (5 tests against the real Roblox API). This closes
+  known issue #8 below; the earlier throwaway scripts were lost to temp cleanup,
+  which is exactly why it mattered.
+
+Sections below are the original 18 September report, kept for history. Where
+they conflict with this update, this update is current.
+
+---
+
+## Summary (18 September 2026)
 
 The bot is **code-complete for v1 and verified to start**, but has **never run
 against a real Discord server or a real MongoDB Atlas cluster**. Every system is

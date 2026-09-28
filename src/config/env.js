@@ -80,6 +80,21 @@ function number(key, fallback) {
   return parsed;
 }
 
+/**
+ * A Roblox numeric id (group, universe). Roblox ids are not Discord snowflakes,
+ * so they get their own check — and a Place ID pasted where a Universe ID
+ * belongs still passes this, which is why the game service logs clearly when
+ * the universe is not found.
+ */
+function numericId(key) {
+  const value = optional(key);
+  if (value && !/^\d{1,20}$/.test(value)) {
+    errors.push(`${key} must be a number, got: ${value}`);
+    return null;
+  }
+  return value;
+}
+
 const nodeEnv = optional('NODE_ENV', 'development');
 
 export const env = Object.freeze({
@@ -99,6 +114,13 @@ export const env = Object.freeze({
 
   /** Bypasses every permission check. The bootstrap for /setup. */
   owners: idList('OWNER_IDS'),
+
+  /**
+   * Re-register slash commands on startup when they differ from the code.
+   * On by default: forgetting `npm run deploy` after an update is exactly how
+   * the bot ends up showing commands it can no longer run.
+   */
+  autoDeployCommands: bool('AUTO_DEPLOY_COMMANDS', true),
 
   /** Optional pre-fill for the /setup wizard; all of it is editable later. */
   setup: Object.freeze({
@@ -160,11 +182,19 @@ export const env = Object.freeze({
     allowBearer: bool('GAME_ALLOW_BEARER', false),
   }),
 
-  /** Reserved for the future Roblox integration — read but never used yet. */
+  /**
+   * Roblox public API. Both optional — player lookups work without either.
+   *
+   *   ROBLOX_UNIVERSE_ID  enables live /game stats (players online, visits).
+   *                       Find it in Creator Hub → your experience → the
+   *                       "Universe ID", not the Place ID in the game URL.
+   *   ROBLOX_GROUP_ID     shows each player's rank in the studio group.
+   *
+   * No API key: every endpoint used is public.
+   */
   roblox: Object.freeze({
-    groupId: optional('ROBLOX_GROUP_ID'),
-    universeId: optional('ROBLOX_UNIVERSE_ID'),
-    apiKey: optional('ROBLOX_API_KEY'),
+    groupId: numericId('ROBLOX_GROUP_ID'),
+    universeId: numericId('ROBLOX_UNIVERSE_ID'),
   }),
 });
 

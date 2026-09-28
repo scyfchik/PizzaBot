@@ -87,8 +87,6 @@ export const Permission = Object.freeze({
   PLAYER_VIEW: 'player.view',
   /** Economy and purchase detail, which is commercially sensitive. */
   PLAYER_ECONOMY: 'player.economy',
-  /** Link or unlink someone else's Roblox account. */
-  PLAYER_LINK_MANAGE: 'player.link',
 
   // Live game data
   GAME_STATS: 'game.stats',
@@ -167,7 +165,6 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.STAFF_LEADERBOARD,
       Permission.PLAYER_VIEW,
       Permission.PLAYER_ECONOMY,
-      Permission.PLAYER_LINK_MANAGE,
       Permission.GAME_STATS,
       Permission.GAME_EVENTS,
     ],
@@ -248,7 +245,6 @@ export const DEFAULT_RANKS = Object.freeze([
       Permission.STAFF_LEADERBOARD,
       Permission.PLAYER_VIEW,
       Permission.PLAYER_ECONOMY,
-      Permission.PLAYER_LINK_MANAGE,
       Permission.GAME_STATS,
     ],
   },

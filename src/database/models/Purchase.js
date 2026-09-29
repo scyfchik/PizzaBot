@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { PurchaseStatus } from '../../config/constants.js';
+import { PurchaseStatus, ProductType } from '../../config/constants.js';
 
 /**
  * A single in-game transaction, reported by the game.
@@ -25,8 +25,13 @@ const purchaseSchema = new mongoose.Schema(
 
     productId: { type: String, default: null },
     productName: { type: String, default: null },
-    /** developer_product | gamepass | subscription */
-    productType: { type: String, default: 'developer_product' },
+    /** What was bought — see ProductType. Drives the grouping in /player purchases. */
+    productType: {
+      type: String,
+      default: ProductType.DEVELOPER_PRODUCT,
+      enum: Object.values(ProductType),
+      index: true,
+    },
 
     robuxAmount: { type: Number, default: 0 },
 

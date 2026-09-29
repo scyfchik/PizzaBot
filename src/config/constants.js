@@ -381,9 +381,15 @@ export const GameEventType = Object.freeze({
   PLAYER_JOIN: 'player_join',
   PLAYER_LEAVE: 'player_leave',
   PLAYER_DEATH: 'player_death',
+  /** Sent for the killer. The victim's death arrives as its own player_death. */
+  PLAYER_KILL: 'player_kill',
   LEVEL_UP: 'level_up',
   PURCHASE_COMPLETED: 'purchase_completed',
   PURCHASE_FAILED: 'purchase_failed',
+  /** Game pass bought in-game (PromptGamePassPurchaseFinished, not ProcessReceipt). */
+  GAMEPASS_PURCHASED: 'gamepass_purchased',
+  /** The game's anticheat flagged this player. Evidence in appeals. */
+  ANTICHEAT_FLAG: 'anticheat_flag',
   RARE_ITEM: 'rare_item',
   ADMIN_COMMAND: 'admin_command',
   SERVER_START: 'server_start',
@@ -398,11 +404,47 @@ export const NOTABLE_GAME_EVENTS = Object.freeze([
   GameEventType.ERROR,
 ]);
 
+/**
+ * Raw event retention, in days. Most events are an audit trail and go after a
+ * month; anticheat flags are appeal evidence and must outlive the appeal
+ * window, so they are kept for a year.
+ */
+export const GAME_EVENT_RETENTION_DAYS = Object.freeze({
+  default: 30,
+  [GameEventType.ANTICHEAT_FLAG]: 365,
+  [GameEventType.ADMIN_COMMAND]: 180,
+});
+
+export const AnticheatSeverity = Object.freeze({
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+});
+
 export const PurchaseStatus = Object.freeze({
   COMPLETED: 'completed',
   FAILED: 'failed',
   REFUNDED: 'refunded',
   PENDING: 'pending',
+});
+
+/** What was bought. "Completed" means it was granted; "failed" means it was not. */
+export const ProductType = Object.freeze({
+  GAMEPASS: 'gamepass',
+  DEVELOPER_PRODUCT: 'developer_product',
+  EMOTE: 'emote',
+  ITEM: 'item',
+  CURRENCY: 'currency',
+  SUBSCRIPTION: 'subscription',
+});
+
+export const ProductTypeLabel = Object.freeze({
+  gamepass: '🎟️ Game passes',
+  developer_product: '📦 Developer products',
+  emote: '💃 Emotes',
+  item: '🎒 Items',
+  currency: '🪙 Currency',
+  subscription: '🔁 Subscriptions',
 });
 
 /** Platforms the game runs on — used by bug reports. */

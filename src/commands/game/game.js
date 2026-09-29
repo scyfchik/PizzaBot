@@ -38,6 +38,23 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName('connection').setDescription('Is the game connected to the bot?'),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('top')
+      .setDescription('Top players by kills, playtime, spend or anticheat flags')
+      .addStringOption((o) =>
+        o
+          .setName('by')
+          .setDescription('What to rank by')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Kills', value: 'kills' },
+            { name: 'Playtime', value: 'playtime' },
+            { name: 'Robux spent', value: 'spend' },
+            { name: 'Anticheat flags', value: 'flags' },
+          ),
+      ),
   );
 
 export const meta = {
@@ -53,7 +70,69 @@ export async function execute(interaction, { client, staff }) {
 
   if (sub === 'connection') return connection(interaction, client, gameData);
   if (sub === 'events') return events(interaction, gameData, staff);
+  if (sub === 'top') return top(interaction, gameData, staff);
   return stats(interaction, gameData, client);
+}
+
+/**
+ * Leaderboards. Spend is economy data and flags are per-player conduct, so
+ * those two need the same nodes as looking them up on /player.
+ */
+const TOP = {
+  kills: {
+    title: '⚔️ Top kills',
+    permission: null,
+    format: (s) => {
+      const k = s.combat?.kills ?? 0;
+      const d = s.combat?.deaths ?? 0;
+      return `${k.toLocaleString()} kills · K/D ${(d ? k / d : k).toFixed(2)}`;
+    },
+  },
+  playtime: {
+    title: '⏱️ Top playtime',
+    permission: null,
+    format: (s) => `${Math.floor((s.activity?.playtimeMinutes ?? 0) / 60).toLocaleString()}h`,
+  },
+  spend: {
+    title: '💰 Top spenders',
+    permission: Permission.PLAYER_ECONOMY,
+    format: (s) => `R$ ${(s.economy?.robuxSpent ?? 0).toLocaleString()}`,
+  },
+  flags: {
+    title: '🚩 Most anticheat flags',
+    permission: Permission.PLAYER_VIEW,
+    format: (s) =>
+      `${s.anticheat?.flags ?? 0} flag(s)` +
+      (s.anticheat?.highSeverity ? ` · ${s.anticheat.highSeverity} high` : '') +
+      (s.anticheat?.lastCheck ? ` · last \`${s.anticheat.lastCheck}\`` : ''),
+  },
+};
+
+async function top(interaction, gameData, staff) {
+  const by = interaction.options.getString('by', true);
+  const board = TOP[by];
+  if (!board) throw new UserError('Unknown leaderboard.');
+  if (board.permission && !hasPermission(staff, board.permission)) {
+    throw new PermissionError(`This leaderboard needs \`${board.permission}\`.`);
+  }
+  if (!gameData) throw new UserError('Game data is not available.');
+
+  const rows = await gameData.leaderboard(interaction.guildId, by, 15);
+  const medal = (i) => ['🥇', '🥈', '🥉'][i] ?? `\`${String(i + 1).padStart(2)}\``;
+
+  return interaction.editReply({
+    embeds: [
+      embeds
+        .neutral(board.title)
+        .setDescription(
+          rows.length
+            ? rows
+                .map((s, i) => `${medal(i)} **${s.robloxUsername ?? s.robloxId}** — ${board.format(s)}`)
+                .join('\n')
+            : 'No data yet — the game has not reported any.',
+        ),
+    ],
+  });
 }
 
 /**

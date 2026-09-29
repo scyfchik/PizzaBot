@@ -309,6 +309,109 @@ export class TicketManager {
         }),
       );
     }
+
+    if (category.attachGameEvidence && ticket.roblox?.id) {
+      // Best-effort: evidence is a convenience, and a failure to build it must
+      // never break the ticket the player has just opened.
+      try {
+        const embed = await this.#gameEvidence(ticket, category.attachGameEvidence);
+        if (embed) await safeAction('post-game-evidence', () => channel.send({ embeds: [embed] }));
+      } catch (err) {
+        log.warn({ err, ticketId: ticket.ticketId }, 'Could not build game evidence');
+      }
+    }
+  }
+
+  /**
+   * Game-side evidence for staff, posted into the ticket on open.
+   *
+   *   appeal   — anticheat flags and combat stats: what a ban is judged on
+   *   purchase — recent purchases (granted and not) and game pass ownership
+   *              according to Roblox: what a purchase complaint is judged on
+   *
+   * Posted to the ticket channel, which the opener can read. Anticheat detail
+   * is therefore limited to check names and counts — enough for staff to decide,
+   * not a manual on which checks exist and how to dodge them.
+   */
+  async #gameEvidence(ticket, kind) {
+    const gameData = this.client.systems.get('gameData');
+    if (!gameData) return null;
+
+    const robloxId = ticket.roblox.id;
+    const stats = await gameData.getStats(ticket.guildId, robloxId);
+
+    if (kind === 'appeal') {
+      const c = stats?.combat ?? {};
+      const a = stats?.activity ?? {};
+      const ac = stats?.anticheat ?? {};
+      const kd = (c.deaths ? (c.kills ?? 0) / c.deaths : (c.kills ?? 0)).toFixed(2);
+
+      const embed = embeds
+        .neutral(`🛡️ Game record — ${ticket.roblox.name}`)
+        .setColor(ac.highSeverity ? Colors.DANGER : ac.flags ? Colors.WARNING : Colors.SUCCESS);
+
+      if (!stats) {
+        return embed.setDescription('No game data reported for this player yet.');
+      }
+
+      const byCheck = Object.entries(ac.byCheck ?? {})
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 5)
+        .map(([k, n]) => `\`${k}\` × ${n}`)
+        .join(' · ');
+
+      return embed.addFields(
+        field(
+          'Anticheat',
+          ac.flags
+            ? `**${ac.flags}** flag(s)${ac.highSeverity ? ` · **${ac.highSeverity} high severity**` : ''}\n${byCheck}`
+            : '✅ No flags',
+        ),
+        field('Kills / Deaths', `${c.kills ?? 0} / ${c.deaths ?? 0} · K/D **${kd}**`, true),
+        field('Playtime', `${Math.floor((a.playtimeMinutes ?? 0) / 60)}h · ${a.sessions ?? 0} sessions`, true),
+      ).setFooter({ text: 'Staff: /player anticheat roblox:' + ticket.roblox.name + ' for full detail' });
+    }
+
+    if (kind === 'purchase') {
+      const roblox = this.client.systems.get('roblox');
+      const [recent, ownership] = await Promise.all([
+        gameData.purchases(ticket.guildId, robloxId, 8),
+        roblox?.gamePasses?.configured
+          ? roblox.gamePasses.ownership(robloxId).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      const embed = embeds.neutral(`💳 Purchase record — ${ticket.roblox.name}`).setColor(Colors.BRAND);
+
+      embed.addFields(
+        field(
+          'Recent purchases',
+          recent.length
+            ? recent
+                .map(
+                  (p) =>
+                    `${p.status === 'completed' ? '✅' : p.status === 'failed' ? '❌' : '🔄'} ` +
+                    `${p.productName ?? p.productId ?? 'Unknown'} · R$ ${p.robuxAmount ?? 0} · <t:${Math.floor(new Date(p.purchasedAt).getTime() / 1000)}:d>`,
+                )
+                .join('\n')
+            : 'None reported by the game.',
+        ),
+      );
+
+      if (ownership) {
+        const owned = ownership.filter((p) => p.owned === true).map((p) => p.name);
+        embed.addFields(
+          field(
+            'Game passes owned (per Roblox)',
+            owned.length ? owned.slice(0, 15).join(', ') : 'None',
+          ),
+        );
+      }
+
+      return embed.setFooter({ text: '✅ granted · ❌ paid but NOT granted · 🔄 refunded' });
+    }
+
+    return null;
   }
 
   /**
@@ -673,6 +776,10 @@ export class TicketManager {
       context.playtimeMinutes = stats.activity?.playtimeMinutes ?? null;
       context.level = stats.progression?.level ?? null;
       context.robuxSpent = stats.economy?.robuxSpent ?? null;
+      context.kills = stats.combat?.kills ?? null;
+      context.deaths = stats.combat?.deaths ?? null;
+      context.anticheatFlags = stats.anticheat?.flags ?? null;
+      context.anticheatHighSeverity = stats.anticheat?.highSeverity ?? null;
 
       const purchases = await gameData.purchases(guild.id, stats.robloxId, 5);
       context.recentPurchases = purchases.map((p) => ({

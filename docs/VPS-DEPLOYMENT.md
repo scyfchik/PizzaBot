@@ -101,7 +101,10 @@ sudo certbot renew --dry-run
 
 ## Firewall
 
+Allow SSH **first** — enabling ufw without it locks you out of the server.
+
 ```bash
+sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw deny 3000/tcp

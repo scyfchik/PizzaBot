@@ -128,6 +128,53 @@ until the game returns `PurchaseGranted`, so the same receipt *will* arrive more
 than once. The bot deduplicates on that id — pass anything else and you will
 double-count the Robux.
 
+### Game passes, emotes and other product types
+
+Game passes are reported **automatically** by `start()` (it listens to
+`PromptGamePassPurchaseFinished`). Nothing to add.
+
+For developer products, pass a type as the last argument so `/player purchases`
+can group them — `"developer_product"` (default), `"emote"`, `"item"`,
+`"currency"`, `"subscription"`:
+
+```lua
+PizzaBot.purchaseCompleted(player, receiptInfo.PurchaseId, receiptInfo.ProductId, "Dance: Floss", 75, "emote")
+```
+
+If granting fails, report it — this is what shows up as **❌ Not granted** in
+`/player purchases` and in purchase-issue tickets:
+
+```lua
+PizzaBot.purchaseFailed(player, receiptInfo.PurchaseId, receiptInfo.ProductId,
+    "DataStore write failed", "Dance: Floss", 75, "emote")
+```
+
+A receipt reported as failed and later granted on Roblox's retry is promoted
+to granted automatically.
+
+### Kills and deaths
+
+Deaths are automatic. Kills are counted from the standard `creator` tag
+(`ObjectValue` under the victim's Humanoid) — most weapons set it. If yours do
+not, set `AUTO_KILLS_FROM_CREATOR_TAG = false` and report kills yourself:
+
+```lua
+PizzaBot.playerKilled(killer, victim, "Pizza Cutter")
+```
+
+### Anticheat
+
+Report every detection, including ones you only log. Staff see them in
+`/player anticheat`, in `/player profile`, and automatically in ban-appeal
+tickets. `"high"` severity also posts to the server log channel.
+
+```lua
+PizzaBot.anticheatFlag(player, "speed", "high", { speed = 180, max = 32 }, "kicked")
+```
+
+Use short stable check names (`speed`, `fly`, `noclip`, `teleport`) — they are
+grouped by name. Anticheat events are kept for a year, not 30 days.
+
 ### Other events
 
 ```lua

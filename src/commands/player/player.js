@@ -11,6 +11,8 @@ import {
   PunishmentType,
   TicketStatus,
   PurchaseStatus,
+  ProductType,
+  ProductTypeLabel,
 } from '../../config/constants.js';
 import { caseLine } from '../../systems/moderation/caseEmbeds.js';
 import { hasPermission } from '../../systems/staff/permissions.js';
@@ -66,14 +68,56 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('purchases')
-      .setDescription('Recent transactions, including failures')
+      .setDescription('What they bought — and what was granted or failed')
+      .addStringOption((o) =>
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
+      )
+      .addUserOption((o) => o.setName('member').setDescription('Discord member'))
+      .addStringOption((o) =>
+        o
+          .setName('type')
+          .setDescription('Only one kind of product')
+          .addChoices(
+            ...Object.values(ProductType).map((value) => ({
+              name: ProductTypeLabel[value].replace(/^\S+\s/, ''),
+              value,
+            })),
+          ),
+      )
+      .addBooleanOption((o) => o.setName('failed-only').setDescription('Only purchases that were NOT granted'))
+      .addIntegerOption((o) =>
+        o.setName('limit').setDescription('How many (default 10)').setMinValue(1).setMaxValue(25),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('stats')
+      .setDescription('Kills, deaths, K/D, playtime and progression')
+      .addStringOption((o) =>
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
+      )
+      .addUserOption((o) => o.setName('member').setDescription('Discord member')),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('anticheat')
+      .setDescription('Anticheat flags — evidence for appeals')
       .addStringOption((o) =>
         o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
       )
       .addUserOption((o) => o.setName('member').setDescription('Discord member'))
       .addIntegerOption((o) =>
-        o.setName('limit').setDescription('How many (default 10)').setMinValue(1).setMaxValue(25),
+        o.setName('limit').setDescription('How many flags (default 10)').setMinValue(1).setMaxValue(25),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('gamepasses')
+      .setDescription('Which of our game passes they own, according to Roblox')
+      .addStringOption((o) =>
+        o.setName('roblox').setDescription('Roblox username or user ID').setMaxLength(20),
+      )
+      .addUserOption((o) => o.setName('member').setDescription('Discord member')),
   );
 
 export const meta = {
@@ -92,6 +136,12 @@ export async function execute(interaction, { client, staff }) {
       return economy(interaction, client, staff);
     case 'purchases':
       return purchases(interaction, client, staff);
+    case 'stats':
+      return stats(interaction, client, staff);
+    case 'anticheat':
+      return anticheat(interaction, client, staff);
+    case 'gamepasses':
+      return gamepasses(interaction, client, staff);
   }
 }
 
@@ -307,13 +357,25 @@ async function profile(interaction, client, staff) {
   if (target.stats) {
     const a = target.stats.activity ?? {};
     const p = target.stats.progression ?? {};
+    const c = target.stats.combat ?? {};
+    const ac = target.stats.anticheat ?? {};
     embed.addFields(
       field(
         '⏱️ In-game',
         `Playtime **${formatPlaytime(a.playtimeMinutes)}** · Level **${p.level ?? 0}**\n` +
+          `Kills **${c.kills ?? 0}** · Deaths **${c.deaths ?? 0}** · K/D **${kdRatio(c.kills, c.deaths)}**\n` +
           `Sessions **${a.sessions ?? 0}** · Last seen ${a.lastSeenAt ? timestamp(a.lastSeenAt, 'R') : 'never'}`,
       ),
     );
+
+    if (ac.flags && !isPublic) {
+      embed.addFields(
+        field(
+          '🛡️ Anticheat',
+          `**${ac.flags}** flag(s)${ac.highSeverity ? ` · **${ac.highSeverity} high**` : ''} · last \`${ac.lastCheck ?? '?'}\` ${ac.lastFlagAt ? timestamp(ac.lastFlagAt, 'R') : ''}\nDetails: \`/player anticheat\``,
+        ),
+      );
+    }
 
     if (canSeeEconomy) {
       const e = target.stats.economy ?? {};
@@ -492,35 +554,243 @@ async function purchases(interaction, client, staff) {
   const robloxId = target.roblox?.id ?? target.stats?.robloxId ?? null;
   if (!robloxId) throw new UserError(noRobloxMessage(target));
 
+  const gameData = client.getSystem('gameData');
   const limit = interaction.options.getInteger('limit') ?? 10;
-  const rows = await client.getSystem('gameData').purchases(interaction.guildId, robloxId, limit);
-  if (!rows.length) throw new UserError('No transactions recorded for that player.');
+  const productType = interaction.options.getString('type');
+  const failedOnly = interaction.options.getBoolean('failed-only') ?? false;
+
+  const [rows, breakdown] = await Promise.all([
+    gameData.purchases(interaction.guildId, robloxId, limit, {
+      productType,
+      status: failedOnly ? PurchaseStatus.FAILED : null,
+    }),
+    gameData.purchaseBreakdown(interaction.guildId, robloxId),
+  ]);
+
+  if (!Object.keys(breakdown).length) {
+    throw new UserError(
+      'No purchases reported for that player. For game passes, `/player gamepasses` asks Roblox directly.',
+    );
+  }
+
+  const embed = embeds.brand(`💳 Purchases — ${displayName(target, robloxId)}`);
+  if (target.roblox?.headshotUrl) embed.setThumbnail(target.roblox.headshotUrl);
+
+  // Summary per product type: granted vs not granted. The "not granted" count
+  // is what a purchase-support ticket is almost always about.
+  embed.addFields(
+    ...Object.entries(breakdown).map(([type, b]) =>
+      field(
+        ProductTypeLabel[type] ?? type,
+        `✅ Granted **${b.granted}**` +
+          (b.failed ? ` · ❌ **Not granted ${b.failed}**` : '') +
+          (b.refunded ? ` · 🔄 Refunded ${b.refunded}` : '') +
+          `\nR$ ${b.robux.toLocaleString()}`,
+        true,
+      ),
+    ),
+  );
 
   const icon = {
-    [PurchaseStatus.COMPLETED]: '🟢',
-    [PurchaseStatus.FAILED]: '🔴',
+    [PurchaseStatus.COMPLETED]: '✅',
+    [PurchaseStatus.FAILED]: '❌',
     [PurchaseStatus.REFUNDED]: '🔄',
     [PurchaseStatus.PENDING]: '⏳',
   };
 
-  await interaction.editReply({
-    embeds: [
-      embeds
-        .brand(`💳 Transactions — ${displayName(target, robloxId)}`)
-        .setDescription(
-          rows
+  embed.addFields(
+    field(
+      failedOnly ? 'Not granted' : productType ? `Recent — ${ProductTypeLabel[productType]}` : 'Recent',
+      rows.length
+        ? rows
             .map(
               (p) =>
-                `${icon[p.status] ?? '•'} **${p.productName ?? p.productId ?? 'Unknown product'}** — ` +
-                `R$ ${(p.robuxAmount ?? 0).toLocaleString()}\n` +
-                `└ ${timestamp(p.purchasedAt, 'f')} · \`${truncate(p.transactionId, 24)}\`` +
-                (p.failureReason ? `\n└ ⚠️ ${truncate(p.failureReason, 100)}` : ''),
+                `${icon[p.status] ?? '•'} **${truncate(p.productName ?? p.productId ?? 'Unknown', 40)}** · ` +
+                `R$ ${(p.robuxAmount ?? 0).toLocaleString()} · ${timestamp(p.purchasedAt, 'd')}` +
+                (p.failureReason ? `\n└ ⚠️ ${truncate(p.failureReason, 80)}` : ''),
             )
-            .join('\n\n'),
-        )
-        .setFooter({ text: `${rows.length} most recent` }),
-    ],
+            .join('\n')
+        : 'Nothing matches that filter.',
+    ),
+  );
+
+  embed.setFooter({ text: '✅ = item was granted in-game · ❌ = payment recorded but item not granted' });
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ------------------------------------------------------------------ stats
+
+/** K/D with a sensible zero-deaths case: 12 kills and 0 deaths is 12.00, not ∞. */
+export function kdRatio(kills, deaths) {
+  const k = kills ?? 0;
+  const d = deaths ?? 0;
+  return (d === 0 ? k : k / d).toFixed(2);
+}
+
+async function stats(interaction, client, staff) {
+  guardAccess(interaction, staff);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const target = await resolveTarget(interaction, client);
+  if (!target.stats) {
+    throw new UserError(
+      target.roblox
+        ? `Your game has not reported anything for **${target.roblox.name}** yet.`
+        : noRobloxMessage(target),
+    );
+  }
+
+  const s = target.stats;
+  const c = s.combat ?? {};
+  const a = s.activity ?? {};
+  const p = s.progression ?? {};
+  const ac = s.anticheat ?? {};
+
+  const embed = embeds
+    .brand(`📊 Player stats — ${displayName(target, s.robloxId)}`)
+    .addFields(
+      field('⚔️ Kills', (c.kills ?? 0).toLocaleString(), true),
+      field('💀 Deaths', (c.deaths ?? 0).toLocaleString(), true),
+      field('📈 K/D', kdRatio(c.kills, c.deaths), true),
+      field('⏱️ Playtime', formatPlaytime(a.playtimeMinutes), true),
+      field('🎮 Sessions', String(a.sessions ?? 0), true),
+      field('⭐ Level', `${p.level ?? 0} · ${(p.xp ?? 0).toLocaleString()} XP`, true),
+      field('🕒 First seen', a.firstSeenAt ? timestamp(a.firstSeenAt, 'D') : '—', true),
+      field('👀 Last seen', a.lastSeenAt ? timestamp(a.lastSeenAt, 'R') : '—', true),
+      field(
+        '🛡️ Anticheat',
+        ac.flags ? `**${ac.flags}** flag(s)${ac.highSeverity ? ` · ${ac.highSeverity} high` : ''}` : 'Clean',
+        true,
+      ),
+    );
+
+  if (target.roblox?.headshotUrl) embed.setThumbnail(target.roblox.headshotUrl);
+  if (ac.flags) embed.setFooter({ text: 'Details: /player anticheat' });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ------------------------------------------------------------------ anticheat
+
+async function anticheat(interaction, client, staff) {
+  if (!hasPermission(staff, Permission.PLAYER_VIEW)) {
+    throw new PermissionError('Anticheat history is a staff tool.');
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const target = await resolveTarget(interaction, client);
+  const robloxId = target.roblox?.id ?? target.stats?.robloxId ?? null;
+  if (!robloxId) throw new UserError(noRobloxMessage(target));
+
+  const limit = interaction.options.getInteger('limit') ?? 10;
+  const flags = await client.getSystem('gameData').anticheatFlags(interaction.guildId, robloxId, limit);
+  const ac = target.stats?.anticheat ?? {};
+
+  const embed = embeds.brand(`🛡️ Anticheat — ${displayName(target, robloxId)}`);
+  if (target.roblox?.headshotUrl) embed.setThumbnail(target.roblox.headshotUrl);
+
+  if (!ac.flags && !flags.length) {
+    embed.setDescription('✅ No anticheat flags on record.');
+    return interaction.editReply({ embeds: [embed] });
+  }
+
+  const byCheck = Object.entries(ac.byCheck ?? {}).sort((x, y) => y[1] - x[1]);
+  const sevIcon = { high: '🔴', medium: '🟠', low: '🟡' };
+
+  embed.addFields(
+    field('Total flags', String(ac.flags ?? flags.length), true),
+    field('High severity', String(ac.highSeverity ?? 0), true),
+    field(
+      'Period',
+      ac.firstFlagAt ? `${timestamp(ac.firstFlagAt, 'd')} → ${timestamp(ac.lastFlagAt, 'd')}` : '—',
+      true,
+    ),
+  );
+
+  if (byCheck.length) {
+    embed.addFields(
+      field('By check', byCheck.slice(0, 10).map(([k, n]) => `\`${k}\` × **${n}**`).join('\n')),
+    );
+  }
+
+  embed.addFields(
+    field(
+      `Latest ${flags.length}`,
+      flags.length
+        ? flags
+            .map((f) => {
+              const d = f.data ?? {};
+              return (
+                `${sevIcon[d.severity] ?? '🟡'} \`${truncate(d.check ?? 'unknown', 30)}\` · ${timestamp(f.occurredAt, 'f')}` +
+                (d.action ? ` · **${truncate(String(d.action), 20)}**` : '') +
+                (d.details ? `\n└ ${truncate(typeof d.details === 'string' ? d.details : JSON.stringify(d.details), 90)}` : '')
+              );
+            })
+            .join('\n')
+        : 'Individual flags have expired (kept 365 days); totals above remain.',
+    ),
+  );
+
+  embed.setFooter({ text: 'Reported by the game’s anticheat. A flag is a signal, not proof — check the details.' });
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ------------------------------------------------------------------ gamepasses
+
+async function gamepasses(interaction, client, staff) {
+  if (!hasPermission(staff, Permission.PLAYER_ECONOMY)) {
+    throw new PermissionError('Purchase data is restricted.');
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const passes = client.getSystem('roblox').gamePasses;
+  if (!passes.configured) {
+    throw new UserError('Set `ROBLOX_UNIVERSE_ID` in .env to check game pass ownership.');
+  }
+
+  const target = await resolveTarget(interaction, client);
+  const robloxId = target.roblox?.id ?? null;
+  if (!robloxId) {
+    throw new UserError(
+      target.robloxUnavailable ? 'Roblox API is unavailable right now.' : noRobloxMessage(target),
+    );
+  }
+
+  let ownership;
+  try {
+    ownership = await passes.ownership(robloxId);
+  } catch {
+    throw new UserError('Roblox API is unavailable right now — try again in a minute.');
+  }
+  if (!ownership.length) throw new UserError('This experience has no game passes.');
+
+  // What the game *recorded* granting, to compare against what Roblox says is owned.
+  const recorded = await client
+    .getSystem('gameData')
+    .purchases(interaction.guildId, robloxId, 200, { productType: ProductType.GAMEPASS });
+  const recordedIds = new Set(recorded.map((p) => String(p.productId)));
+
+  const owned = ownership.filter((p) => p.owned === true);
+  const lines = ownership.map((p) => {
+    const mark = p.owned === true ? '✅' : p.owned === false ? '▫️' : '❔';
+    // Owned on Roblox but the game never reported granting it: the classic
+    // "I bought it and didn't get it" case, surfaced automatically.
+    const mismatch = p.owned === true && recorded.length > 0 && !recordedIds.has(p.id) ? ' ⚠️ *not recorded as granted*' : '';
+    return `${mark} ${truncate(p.name, 40)}${p.price != null ? ` · R$ ${p.price}` : ''}${mismatch}`;
   });
+
+  const embed = embeds
+    .brand(`🎟️ Game passes — ${displayName(target, robloxId)}`)
+    .setDescription(truncate(lines.join('\n'), 4000))
+    .addFields(field('Owns', `${owned.length} of ${ownership.length}`, true))
+    .setFooter({
+      text:
+        '✅ owned per Roblox · ▫️ not owned · ❔ Roblox did not answer. ' +
+        (recorded.length ? '⚠️ = owned but the game never reported granting it.' : 'The game has not reported any pass grants yet.'),
+    });
+
+  if (target.roblox?.headshotUrl) embed.setThumbnail(target.roblox.headshotUrl);
+  await interaction.editReply({ embeds: [embed] });
 }
 
 function displayName(target, robloxId) {

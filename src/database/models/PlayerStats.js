@@ -35,11 +35,38 @@ const playerStatsSchema = new mongoose.Schema(
     activity: {
       playtimeMinutes: { type: Number, default: 0 },
       sessions: { type: Number, default: 0 },
-      deaths: { type: Number, default: 0 },
       firstSeenAt: { type: Date, default: null },
       lastSeenAt: { type: Date, default: null, index: true },
       /** Set on join, cleared on leave — lets /game stats count who is on now. */
       currentServerId: { type: String, default: null },
+    },
+
+    /**
+     * Kills and deaths over the player's whole history.
+     * K/D is computed at read time, never stored — a stored ratio goes stale
+     * the moment one of its halves changes.
+     */
+    combat: {
+      kills: { type: Number, default: 0 },
+      deaths: { type: Number, default: 0 },
+      lastKillAt: { type: Date, default: null },
+    },
+
+    /**
+     * Anticheat history, reported by the game's own anticheat.
+     *
+     * Totals only — the individual flags, with their details, are GameEvent
+     * rows kept for a year so they can be shown as evidence in an appeal.
+     * `byCheck` counts per check name, so "12 speed flags" reads differently
+     * from "12 different checks once each".
+     */
+    anticheat: {
+      flags: { type: Number, default: 0 },
+      highSeverity: { type: Number, default: 0 },
+      byCheck: { type: mongoose.Schema.Types.Mixed, default: {} },
+      firstFlagAt: { type: Date, default: null },
+      lastFlagAt: { type: Date, default: null },
+      lastCheck: { type: String, default: null },
     },
 
     economy: {
@@ -66,5 +93,7 @@ playerStatsSchema.index({ guildId: 1, robloxId: 1 }, { unique: true });
 playerStatsSchema.index({ guildId: 1, 'economy.robuxSpent': -1 });
 playerStatsSchema.index({ guildId: 1, 'activity.playtimeMinutes': -1 });
 playerStatsSchema.index({ guildId: 1, 'activity.currentServerId': 1 });
+playerStatsSchema.index({ guildId: 1, 'combat.kills': -1 });
+playerStatsSchema.index({ guildId: 1, 'anticheat.flags': -1 });
 
 export const PlayerStats = mongoose.model('PlayerStats', playerStatsSchema);

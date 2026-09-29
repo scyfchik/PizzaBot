@@ -125,6 +125,10 @@ const transcriptSchema = new mongoose.Schema(
       playtimeMinutes: { type: Number, default: null },
       level: { type: Number, default: null },
       robuxSpent: { type: Number, default: null },
+      kills: { type: Number, default: null },
+      deaths: { type: Number, default: null },
+      anticheatFlags: { type: Number, default: null },
+      anticheatHighSeverity: { type: Number, default: null },
       /** Recent transactions, for purchase-support tickets. */
       recentPurchases: {
         type: [

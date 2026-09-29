@@ -117,6 +117,8 @@ export const TICKET_CATEGORIES = [
     priority: TicketPriority.NORMAL,
     /** The manager attaches the opener's case history to appeals automatically. */
     attachHistory: true,
+    /** Anticheat flags and combat stats — what an appeal is judged on. */
+    attachGameEvidence: 'appeal',
     fields: [
       {
         key: 'roblox_username',
@@ -164,6 +166,8 @@ export const TICKET_CATEGORIES = [
     description: 'Robux purchase or gamepass problem',
     channelPrefix: 'purchase',
     priority: TicketPriority.HIGH,
+    /** Recent purchases and game pass ownership per Roblox. */
+    attachGameEvidence: 'purchase',
     fields: [
       {
         key: 'roblox_username',

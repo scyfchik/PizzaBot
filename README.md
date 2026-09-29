@@ -51,7 +51,11 @@ Players
   /player profile     Roblox account (via Roblox API) + game stats + support history
   /player history     moderation and support record
   /player economy     spend summary
-  /player purchases   transactions, including failures
+  /player purchases   what they bought (game passes, emotes, products) — granted vs NOT granted
+  /player stats       kills, deaths, K/D, playtime, sessions, level
+  /player anticheat   anticheat flags: per check, severity, what the game did
+  /player gamepasses  game passes owned per Roblox vs purchases the game recorded
+  /game top           leaderboards: kills, playtime, spend, anticheat flags
 
 Support
   /tickets list       browse the queue        (/tickets queue, /tickets stats)

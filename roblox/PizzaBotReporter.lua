@@ -13,7 +13,7 @@
 	  4. require() it from a Script and call the helpers.
 
 	WHY THIS EXISTS
-	  Roblox exposes no API for playtime, level, Robux spent or in-game
+	  Roblox exposes no API for playtime, kills, anticheat flags, Robux spent or in-game
 	  events. That data lives only on your servers, so the game has to report
 	  it. Nothing here is optional decoration — it is the only path by which
 	  /player, /game stats and purchase support get any data at all.
@@ -30,6 +30,7 @@
 ]]
 
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -45,6 +46,15 @@ local API_KEY = "replace-me-with-at-least-32-random-characters"
 
 --- Set false to disable reporting without removing the module.
 local ENABLED = true
+
+--[[
+	Count kills from the classic "creator" tag: an ObjectValue named
+	"creator" under the victim's Humanoid whose Value is the killing Player.
+	Most Roblox weapons (and the old Linked Sword) set it. If your weapons do
+	not, set this false and call PizzaBotReporter.playerKilled yourself —
+	never both, or every kill counts twice.
+]]
+local AUTO_KILLS_FROM_CREATOR_TAG = true
 
 -- ============================================================================
 
@@ -181,6 +191,9 @@ function PizzaBotReporter.report(eventType: string, player: Player?, data: { [st
 	end
 
 	table.insert(queue, {
+		-- Unique per event. A batch retried after a timeout (the bot stored it,
+		-- the response was lost) is then recognised and not counted twice.
+		eventId = HttpService:GenerateGUID(false),
 		type = eventType,
 		robloxId = player and tostring(player.UserId) or nil,
 		robloxUsername = player and player.Name or nil,
@@ -259,6 +272,54 @@ function PizzaBotReporter.playerDied(player: Player, cause: string?)
 	PizzaBotReporter.report("player_death", player, { cause = cause })
 end
 
+--[[
+	A kill, reported for the killer. The victim's death is reported separately
+	by playerDied (start() does that automatically) — this does not count it.
+]]
+function PizzaBotReporter.playerKilled(killer: Player, victim: Player?, weapon: string?)
+	PizzaBotReporter.report("player_kill", killer, {
+		victimId = victim and tostring(victim.UserId) or nil,
+		victimName = victim and victim.Name or nil,
+		weapon = weapon,
+	})
+end
+
+--[[
+	Your anticheat detected something. Report it even when you only log and
+	do not kick — staff judging a ban appeal need the whole history.
+
+	  check     short stable name: "speed", "fly", "noclip", "teleport", ...
+	  severity  "low" | "medium" | "high" (high pings the staff log channel)
+	  details   free-form context, e.g. { speed = 180, max = 32 }
+	  action    what the game did: "logged" | "kicked" | "banned" | ...
+]]
+function PizzaBotReporter.anticheatFlag(
+	player: Player,
+	check: string,
+	severity: string?,
+	details: { [string]: any }?,
+	action: string?
+)
+	PizzaBotReporter.report("anticheat_flag", player, {
+		check = check,
+		severity = severity or "medium",
+		details = details,
+		action = action or "logged",
+	})
+end
+
+--[[
+	A game pass was bought. start() reports this automatically from
+	PromptGamePassPurchaseFinished; call it yourself only if you disabled that.
+]]
+function PizzaBotReporter.gamepassPurchased(player: Player, passId: number, passName: string?, price: number?)
+	PizzaBotReporter.report("gamepass_purchased", player, {
+		gamePassId = tostring(passId),
+		productName = passName,
+		robuxAmount = price,
+	})
+end
+
 --- `level` is absolute, not a delta — a replayed event must not ratchet it up.
 function PizzaBotReporter.levelUp(player: Player, level: number, xp: number?)
 	PizzaBotReporter.report("level_up", player, { level = level, xp = xp })
@@ -277,13 +338,15 @@ function PizzaBotReporter.purchaseCompleted(
 	transactionId: string,
 	productId: string | number,
 	productName: string,
-	robuxAmount: number
+	robuxAmount: number,
+	productType: string? -- "developer_product" (default) | "emote" | "item" | "currency"
 )
 	PizzaBotReporter.report("purchase_completed", player, {
 		transactionId = transactionId,
 		productId = tostring(productId),
 		productName = productName,
 		robuxAmount = robuxAmount,
+		productType = productType,
 	})
 end
 
@@ -291,12 +354,18 @@ function PizzaBotReporter.purchaseFailed(
 	player: Player,
 	transactionId: string,
 	productId: string | number,
-	reason: string
+	reason: string,
+	productName: string?,
+	robuxAmount: number?,
+	productType: string?
 )
 	PizzaBotReporter.report("purchase_failed", player, {
 		transactionId = transactionId,
 		productId = tostring(productId),
 		failureReason = reason,
+		productName = productName,
+		robuxAmount = robuxAmount,
+		productType = productType,
 	})
 end
 
@@ -327,6 +396,13 @@ function PizzaBotReporter.start()
 			if humanoid and humanoid:IsA("Humanoid") then
 				humanoid.Died:Connect(function()
 					PizzaBotReporter.playerDied(player)
+					if AUTO_KILLS_FROM_CREATOR_TAG then
+						local tag = humanoid:FindFirstChild("creator")
+						local killer = tag and tag:IsA("ObjectValue") and tag.Value
+						if killer and killer:IsA("Player") and killer ~= player then
+							PizzaBotReporter.playerKilled(killer, player)
+						end
+					end
 				end)
 			end
 		end)
@@ -334,6 +410,23 @@ function PizzaBotReporter.start()
 
 	Players.PlayerRemoving:Connect(function(player)
 		PizzaBotReporter.playerLeft(player)
+	end)
+
+	-- Game passes do not go through ProcessReceipt, so this is the only hook.
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+		if not purchased then
+			return
+		end
+		-- Name and price are nice-to-have; a failed lookup must not lose the event.
+		local ok, info = pcall(function()
+			return MarketplaceService:GetProductInfo(passId, Enum.InfoType.GamePass)
+		end)
+		PizzaBotReporter.gamepassPurchased(
+			player,
+			passId,
+			ok and info and info.Name or nil,
+			ok and info and info.PriceInRobux or nil
+		)
 	end)
 
 	PizzaBotReporter.report("server_start")

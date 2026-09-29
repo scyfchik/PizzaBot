@@ -20,6 +20,16 @@ const gameEventSchema = new mongoose.Schema(
     guildId: { type: String, required: true, index: true },
     type: { type: String, required: true, enum: Object.values(GameEventType), index: true },
 
+    /**
+     * Unique id the game assigns to each event (a GUID).
+     *
+     * The game retries a batch whose HTTP response was lost — even though the
+     * bot may already have stored it. Without this id, every retry would add
+     * the kills, deaths and anticheat flags a second time. With it, a repeat is
+     * recognised and ignored. Optional, so older reporters still work.
+     */
+    eventId: { type: String, default: null },
+
     robloxId: { type: String, default: null, index: true },
     robloxUsername: { type: String, default: null },
 
@@ -39,6 +49,11 @@ const gameEventSchema = new mongoose.Schema(
 );
 
 gameEventSchema.index({ guildId: 1, occurredAt: -1 });
+/** Deduplication — partial so events without an id never collide on null. */
+gameEventSchema.index(
+  { guildId: 1, eventId: 1 },
+  { unique: true, partialFilterExpression: { eventId: { $type: 'string' } } },
+);
 gameEventSchema.index({ guildId: 1, type: 1, occurredAt: -1 });
 gameEventSchema.index({ guildId: 1, robloxId: 1, occurredAt: -1 });
 /** Mongo drops these once `expiresAt` passes; nulls are kept forever. */

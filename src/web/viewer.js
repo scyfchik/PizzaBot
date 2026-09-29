@@ -588,6 +588,18 @@ function renderPlayerContext(context) {
     ['Playtime', playtime],
     ['Level', context.level == null ? '<span class="unknown">—</span>' : num(context.level)],
     ['Robux spent', context.robuxSpent == null ? '<span class="unknown">—</span>' : `R$ ${num(context.robuxSpent)}`],
+    [
+      'Kills / Deaths',
+      context.kills == null
+        ? '<span class="unknown">—</span>'
+        : `${num(context.kills)} / ${num(context.deaths ?? 0)} · K/D ${(context.deaths ? context.kills / context.deaths : context.kills).toFixed(2)}`,
+    ],
+    [
+      'Anticheat flags',
+      context.anticheatFlags == null
+        ? '<span class="unknown">—</span>'
+        : `${num(context.anticheatFlags)}${context.anticheatHighSeverity ? ` (${num(context.anticheatHighSeverity)} high)` : ''}`,
+    ],
   ]
     .map(([k, v]) => `<div class="card"><h3>${escapeHtml(k)}</h3><p>${v}</p></div>`)
     .join('');

@@ -104,6 +104,16 @@ function normalise(command) {
   };
 }
 
+/**
+ * Discord silently drops the emoji variation selector (U+FE0F) from stored
+ * text: "⚖️ Ban Appeal" goes in, "⚖ Ban Appeal" comes back. Without this, a
+ * command containing such an emoji is reported as changed on every start and
+ * re-registered for nothing — observed live on /tickets.
+ */
+function stripVariationSelectors(text) {
+  return String(text ?? '').replace(/️/g, '');
+}
+
 function normaliseOptions(options) {
   if (!options?.length) return [];
   return options.map((o) => ({
@@ -117,7 +127,7 @@ function normaliseOptions(options) {
     min_length: o.min_length ?? null,
     max_length: o.max_length ?? null,
     channel_types: o.channel_types ? [...o.channel_types].sort() : [],
-    choices: (o.choices ?? []).map((c) => ({ name: c.name, value: c.value })),
+    choices: (o.choices ?? []).map((c) => ({ name: stripVariationSelectors(c.name), value: c.value })),
     options: normaliseOptions(o.options),
   }));
 }

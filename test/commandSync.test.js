@@ -19,6 +19,8 @@ function asDiscordReturnsIt(command) {
       const copy = { ...o };
       if (copy.required === false) delete copy.required;
       if (copy.autocomplete === false) delete copy.autocomplete;
+      // Discord drops the emoji variation selector U+FE0F from stored text.
+      if (copy.choices) copy.choices = copy.choices.map((c) => ({ ...c, name: c.name.replace(/️/g, '') }));
       if (copy.options) copy.options = strip(copy.options);
       return copy;
     });
@@ -45,6 +47,13 @@ describe('command sync — compare()', () => {
     const live = local.map(asDiscordReturnsIt);
     const diff = compare(local, live);
     assert.equal(diff.changed, false, JSON.stringify(diff));
+  });
+
+  test('/tickets with "⚖️" is not a false change after Discord strips U+FE0F (seen live)', () => {
+    const tickets = local.find((c) => c.name === 'tickets');
+    const hasSelector = JSON.stringify(tickets).includes('️');
+    assert.ok(hasSelector, 'fixture should contain a variation selector, or this test proves nothing');
+    assert.equal(compare([tickets], [asDiscordReturnsIt(tickets)]).changed, false);
   });
 
   test('reproduces the actual outage: stale and missing commands are detected', () => {
